@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "send-wechat-personal-relay",
+  "main": "src/relay/worker.ts",
+  "compatibility_date": "2026-08-24",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PERSONAL_RELAY",
+        "class_name": "PersonalRelay",
+      },
+    ],
+  },
+  "exports": {
+    "PersonalRelay": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
+}

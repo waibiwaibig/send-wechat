@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.relay.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "types": [
+      "@cloudflare/workers-types",
+      "@cloudflare/vitest-plugin/types",
+      "vitest/globals"
+    ]
+  },
+  "include": ["../src/relay/worker.ts", "./relay-worker.test.ts"],
+  "exclude": ["../node_modules", "../dist", "../coverage"]
+}

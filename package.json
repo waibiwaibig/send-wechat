@@ -1,0 +1,93 @@
+{
+  "name": "send-wechat",
+  "version": "0.1.0-rc.1",
+  "description": "Send text or files to one explicitly bound Weixin user from the command line.",
+  "keywords": [
+    "wechat",
+    "weixin",
+    "cli",
+    "automation"
+  ],
+  "author": "waibiwaibig",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/waibiwaibig/send-wechat.git"
+  },
+  "homepage": "https://github.com/waibiwaibig/send-wechat#readme",
+  "bugs": {
+    "url": "https://github.com/waibiwaibig/send-wechat/issues"
+  },
+  "type": "module",
+  "exports": {},
+  "bin": {
+    "send-wechat": "dist/cli/bin.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "skills"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "scripts": {
+    "clean": "node -e \"const { rmSync } = require('node:fs'); for (const path of ['dist', 'coverage']) rmSync(path, { recursive: true, force: true });\"",
+    "build": "npm run clean && tsc && tsc -p tsconfig.relay.json",
+    "postbuild": "node scripts/finalize-build.mjs && npm run verify:build",
+    "verify:build": "node scripts/verify-build.mjs",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.relay.json --noEmit && tsc -p tests/tsconfig.json --noEmit && tsc -p tests/tsconfig.relay.json --noEmit",
+    "test": "vitest run && npm run test:relay",
+    "test:relay": "vitest run --config vitest.relay.config.ts",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint .",
+    "format:check": "prettier --check .",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test:coverage && npm run test:relay",
+    "prepack": "npm run check && npm run build"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@napi-rs/keyring": "^1.3.0",
+    "@vscode/os-proxy-resolver": "0.3.0",
+    "commander": "^15.0.0",
+    "file-type": "^22.0.2",
+    "proxy-agent": "8.0.2",
+    "qrcode": "^1.5.4",
+    "undici": "8.10.0",
+    "wrangler": "4.125.0",
+    "ws": "8.21.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.0.0",
+    "@cloudflare/workers-types": "5.20260823.1",
+    "@types/node": "^24.13.3",
+    "@types/qrcode": "^1.5.6",
+    "@types/ws": "8.18.1",
+    "@vitest/coverage-v8": "^4.1.11",
+    "eslint": "^10.9.0",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.11"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260820.1": true,
+    "fsevents@2.3.3": true
+  }
+}

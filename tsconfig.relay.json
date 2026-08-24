@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src/relay/worker.ts"],
+  "exclude": ["node_modules", "dist", "coverage", "tests"]
+}

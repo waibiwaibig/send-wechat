@@ -1,0 +1,39 @@
+name: Upstream protocol monitor
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PINNED_COMMIT: cef0bfc390393f716903e16d50408118047f87e0
+      UPSTREAM_REPOSITORY: https://github.com/Tencent/openclaw-weixin.git
+    steps:
+      - name: Compare pinned protocol source with upstream main
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_commit="$(git ls-remote "$UPSTREAM_REPOSITORY" refs/heads/main | awk '{print $1}')"
+          test -n "$current_commit"
+          if [[ "$current_commit" == "$PINNED_COMMIT" ]]; then
+            exit 0
+          fi
+
+          title="Audit Tencent iLink upstream ${current_commit}"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq 'length')"
+          if [[ "$existing" != "0" ]]; then
+            exit 0
+          fi
+
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$title" \
+            --body "The pinned protocol source is \`$PINNED_COMMIT\`, while Tencent/openclaw-weixin main is now \`$current_commit\`. Audit the upstream diff manually. This workflow must not update protocol code or merge changes automatically."

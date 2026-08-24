@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".."
+  },
+  "include": ["../src/**/*.ts", "./**/*.ts"],
+  "exclude": [
+    "../node_modules",
+    "../dist",
+    "../coverage",
+    "../src/relay/worker.ts",
+    "./relay-worker.test.ts"
+  ]
+}
