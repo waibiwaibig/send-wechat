@@ -174,40 +174,43 @@ describe("owner reset", () => {
     ).rejects.toThrow("keychain");
   });
 
-  it("deletes a Linux client's file credential without requiring a keyring", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-client-"));
-    roots.push(root);
-    const fixture = {
-      ...paths(root),
-      platform: "linux" as const,
-      clientCredentialFile: join(root, "state", "client-credential.json"),
-    };
-    await mkdir(fixture.stateDir, { recursive: true, mode: 0o700 });
-    await writeFile(
-      fixture.installationFile,
-      JSON.stringify({
-        schemaVersion: 1,
-        role: "client",
-        relayUrl: "https://relay.workers.dev",
-        deviceId: Buffer.alloc(16, 1).toString("base64url"),
-      }),
-      { mode: 0o600 },
-    );
-    await writeFile(fixture.clientCredentialFile, "client", { mode: 0o600 });
+  it.skipIf(process.platform === "win32")(
+    "deletes a Linux client's file credential without requiring a keyring",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-client-"));
+      roots.push(root);
+      const fixture = {
+        ...paths(root),
+        platform: "linux" as const,
+        clientCredentialFile: join(root, "state", "client-credential.json"),
+      };
+      await mkdir(fixture.stateDir, { recursive: true, mode: 0o700 });
+      await writeFile(
+        fixture.installationFile,
+        JSON.stringify({
+          schemaVersion: 1,
+          role: "client",
+          relayUrl: "https://relay.workers.dev",
+          deviceId: Buffer.alloc(16, 1).toString("base64url"),
+        }),
+        { mode: 0o600 },
+      );
+      await writeFile(fixture.clientCredentialFile, "client", { mode: 0o600 });
 
-    let keyringDeletes = 0;
-    await resetOwnerData(fixture, {
-      credentialStore: {
-        delete: async () => {
-          keyringDeletes += 1;
-          throw new Error("headless keyring unavailable");
+      let keyringDeletes = 0;
+      await resetOwnerData(fixture, {
+        credentialStore: {
+          delete: async () => {
+            keyringDeletes += 1;
+            throw new Error("headless keyring unavailable");
+          },
         },
-      },
-    });
+      });
 
-    expect(keyringDeletes).toBe(0);
-    await expect(lstat(fixture.clientCredentialFile)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
+      expect(keyringDeletes).toBe(0);
+      await expect(lstat(fixture.clientCredentialFile)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 });

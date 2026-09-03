@@ -49,107 +49,119 @@ async function fixturePath(): Promise<string> {
 }
 
 describe("owner-only Linux client relay credential store", () => {
-  it("round-trips a client credential with owner-only parent and file modes", async () => {
-    const filePath = await fixturePath();
-    const store = new OwnerOnlyClientRelayCredentialStore(filePath);
+  it.skipIf(process.platform === "win32")(
+    "round-trips a client credential with owner-only parent and file modes",
+    async () => {
+      const filePath = await fixturePath();
+      const store = new OwnerOnlyClientRelayCredentialStore(filePath);
 
-    await store.save(clientCredential);
+      await store.save(clientCredential);
 
-    await expect(store.load()).resolves.toEqual(clientCredential);
-    await expect(stat(join(filePath, ".."))).resolves.toMatchObject({
-      mode: expect.any(Number),
-    });
-    expect((await stat(join(filePath, ".."))).mode & 0o777).toBe(0o700);
-    expect((await stat(filePath)).mode & 0o777).toBe(0o600);
-    await expect(readFile(filePath, "utf8")).resolves.toContain(
-      '"role":"client"',
-    );
-  });
+      await expect(store.load()).resolves.toEqual(clientCredential);
+      await expect(stat(join(filePath, ".."))).resolves.toMatchObject({
+        mode: expect.any(Number),
+      });
+      expect((await stat(join(filePath, ".."))).mode & 0o777).toBe(0o700);
+      expect((await stat(filePath)).mode & 0o777).toBe(0o600);
+      await expect(readFile(filePath, "utf8")).resolves.toContain(
+        '"role":"client"',
+      );
+    },
+  );
 
-  it("fails closed for Hub records, malformed data, oversized data, and unsafe modes", async () => {
-    const filePath = await fixturePath();
-    const store = new OwnerOnlyClientRelayCredentialStore(filePath);
+  it.skipIf(process.platform === "win32")(
+    "fails closed for Hub records, malformed data, oversized data, and unsafe modes",
+    async () => {
+      const filePath = await fixturePath();
+      const store = new OwnerOnlyClientRelayCredentialStore(filePath);
 
-    await expect(store.save(hubCredential as never)).rejects.toMatchObject({
-      code: "RELAY_CREDENTIAL_SCHEMA_INVALID",
-    });
+      await expect(store.save(hubCredential as never)).rejects.toMatchObject({
+        code: "RELAY_CREDENTIAL_SCHEMA_INVALID",
+      });
 
-    await mkdir(join(filePath, ".."), { recursive: true, mode: 0o700 });
-    await writeFile(filePath, JSON.stringify(hubCredential), { mode: 0o600 });
-    await expect(store.load()).rejects.toMatchObject({
-      code: "RELAY_CREDENTIAL_SCHEMA_INCOMPATIBLE",
-    });
+      await mkdir(join(filePath, ".."), { recursive: true, mode: 0o700 });
+      await writeFile(filePath, JSON.stringify(hubCredential), { mode: 0o600 });
+      await expect(store.load()).rejects.toMatchObject({
+        code: "RELAY_CREDENTIAL_SCHEMA_INCOMPATIBLE",
+      });
 
-    await writeFile(filePath, "{".repeat(64 * 1024), { mode: 0o600 });
-    await expect(store.load()).rejects.toMatchObject({
-      code: "RELAY_CREDENTIAL_SCHEMA_INCOMPATIBLE",
-    });
+      await writeFile(filePath, "{".repeat(64 * 1024), { mode: 0o600 });
+      await expect(store.load()).rejects.toMatchObject({
+        code: "RELAY_CREDENTIAL_SCHEMA_INCOMPATIBLE",
+      });
 
-    await writeFile(filePath, JSON.stringify(clientCredential), {
-      mode: 0o640,
-    });
-    await chmod(filePath, 0o640);
-    await expect(store.load()).rejects.toMatchObject({
-      code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
-    });
+      await writeFile(filePath, JSON.stringify(clientCredential), {
+        mode: 0o640,
+      });
+      await chmod(filePath, 0o640);
+      await expect(store.load()).rejects.toMatchObject({
+        code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
+      });
 
-    await chmod(filePath, 0o600);
-    await chmod(join(filePath, ".."), 0o750);
-    await expect(store.load()).rejects.toMatchObject({
-      code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
-    });
-    await expect(store.save(clientCredential)).rejects.toMatchObject({
-      code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
-    });
-  });
+      await chmod(filePath, 0o600);
+      await chmod(join(filePath, ".."), 0o750);
+      await expect(store.load()).rejects.toMatchObject({
+        code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
+      });
+      await expect(store.save(clientCredential)).rejects.toMatchObject({
+        code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
+      });
+    },
+  );
 
-  it("rejects a symlinked credential parent directory", async () => {
-    const root = await mkdtemp(
-      join(tmpdir(), "send-wechat-client-credential-parent-"),
-    );
-    roots.push(root);
-    const outside = join(root, "outside");
-    const linkedParent = join(root, "state");
-    const filePath = join(linkedParent, "client-credential.json");
-    await mkdir(outside, { mode: 0o700 });
-    await writeFile(
-      join(outside, "client-credential.json"),
-      JSON.stringify(clientCredential),
-      { mode: 0o600 },
-    );
-    await symlink(outside, linkedParent);
-    const store = new OwnerOnlyClientRelayCredentialStore(filePath);
+  it.skipIf(process.platform === "win32")(
+    "rejects a symlinked credential parent directory",
+    async () => {
+      const root = await mkdtemp(
+        join(tmpdir(), "send-wechat-client-credential-parent-"),
+      );
+      roots.push(root);
+      const outside = join(root, "outside");
+      const linkedParent = join(root, "state");
+      const filePath = join(linkedParent, "client-credential.json");
+      await mkdir(outside, { mode: 0o700 });
+      await writeFile(
+        join(outside, "client-credential.json"),
+        JSON.stringify(clientCredential),
+        { mode: 0o600 },
+      );
+      await symlink(outside, linkedParent);
+      const store = new OwnerOnlyClientRelayCredentialStore(filePath);
 
-    await expect(store.load()).rejects.toMatchObject({
-      code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
-    });
-    await expect(store.save(clientCredential)).rejects.toMatchObject({
-      code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
-    });
-  });
+      await expect(store.load()).rejects.toMatchObject({
+        code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
+      });
+      await expect(store.save(clientCredential)).rejects.toMatchObject({
+        code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
+      });
+    },
+  );
 
-  it("rejects symlinked credential paths and removes only the link on delete", async () => {
-    const filePath = await fixturePath();
-    const outsidePath = join(filePath, "..", "outside.json");
-    await mkdir(join(filePath, ".."), { recursive: true, mode: 0o700 });
-    await writeFile(outsidePath, JSON.stringify(clientCredential), {
-      mode: 0o600,
-    });
-    await symlink(outsidePath, filePath);
-    const store = new OwnerOnlyClientRelayCredentialStore(filePath);
+  it.skipIf(process.platform === "win32")(
+    "rejects symlinked credential paths and removes only the link on delete",
+    async () => {
+      const filePath = await fixturePath();
+      const outsidePath = join(filePath, "..", "outside.json");
+      await mkdir(join(filePath, ".."), { recursive: true, mode: 0o700 });
+      await writeFile(outsidePath, JSON.stringify(clientCredential), {
+        mode: 0o600,
+      });
+      await symlink(outsidePath, filePath);
+      const store = new OwnerOnlyClientRelayCredentialStore(filePath);
 
-    await expect(store.load()).rejects.toMatchObject({
-      code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
-    });
-    await expect(store.save(clientCredential)).rejects.toMatchObject({
-      code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
-    });
-    await store.delete();
-    await expect(lstat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(readFile(outsidePath, "utf8")).resolves.toContain(
-      '"role":"client"',
-    );
-  });
+      await expect(store.load()).rejects.toMatchObject({
+        code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
+      });
+      await expect(store.save(clientCredential)).rejects.toMatchObject({
+        code: "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE",
+      });
+      await store.delete();
+      await expect(lstat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(outsidePath, "utf8")).resolves.toContain(
+        '"role":"client"',
+      );
+    },
+  );
 
   it("selects the file store only for Linux clients and native storage everywhere else", () => {
     const paths = (platform: PlatformPaths["platform"]): PlatformPaths => ({
