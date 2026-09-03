@@ -10,6 +10,7 @@ import {
   currentSupportedPlatform,
 } from "../platform/current.js";
 import {
+  assertLinuxServiceRuntime,
   prepareOwnerDirectories,
   type PlatformPaths,
 } from "../platform/paths.js";
@@ -45,6 +46,7 @@ function daemonSleep(milliseconds: number): Promise<void> {
 export async function startProductionDaemon(
   paths: PlatformPaths = currentPlatformPaths(),
 ): Promise<CloseableDaemon> {
+  assertLinuxServiceRuntime(paths);
   await prepareOwnerDirectories(paths, {
     platform: currentSupportedPlatform(),
   });

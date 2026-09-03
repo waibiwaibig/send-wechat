@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { PairingInvitations } from "../src/relay/invitation.js";
 import { humanSuccess, runCommand } from "../src/cli/operations.js";
 import type { CliContext } from "../src/cli/context.js";
 import type { InstallationState } from "../src/storage/installation-store.js";
@@ -116,6 +117,48 @@ describe("CLI operations", () => {
     });
     expect(events).toEqual(["qr:qr", "state:wait", "verify"]);
     expect(calls[1]?.[0]).toMatchObject({ command: "send_text" });
+  });
+
+  it("reads and trims a pairing invitation from stdin", async () => {
+    const calls: unknown[] = [];
+    const invitation = new PairingInvitations().issue(
+      "https://alice.workers.dev",
+    );
+    const fake = context({
+      readStdin: async () => `\n  ${invitation}  \n`,
+      setup: async (options) => {
+        calls.push(options);
+        return { ok: true, command: "setup", state: "paired" };
+      },
+    });
+    await expect(
+      runCommand(fake as unknown as CliContext, "setup", {
+        pairStdin: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      command: "setup",
+    });
+    expect(calls).toEqual([{ pair: invitation }]);
+  });
+
+  it("rejects pairing invitation argv and stdin together", async () => {
+    const setup = vi.fn(async () => ({
+      ok: true,
+      command: "setup",
+      state: "paired",
+    }));
+    const fake = context({ setup });
+    const invitation = new PairingInvitations().issue(
+      "https://alice.workers.dev",
+    );
+    await expect(
+      runCommand(fake as unknown as CliContext, "setup", {
+        pair: invitation,
+        pairStdin: true,
+      }),
+    ).rejects.toMatchObject({ code: "USAGE_ERROR" });
+    expect(setup).not.toHaveBeenCalled();
   });
 
   it("validates send input, file safety, and idempotency keys before IPC", async () => {

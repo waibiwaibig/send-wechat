@@ -74,6 +74,7 @@ function dependencies(
       installationFile: path.join(stateDir, "installation.json"),
       idempotencyFile: path.join(stateDir, "idempotency.sqlite3"),
       capabilityFile: path.join(stateDir, "capability"),
+      clientCredentialFile: path.join(stateDir, "client-credential.json"),
       tempDir: path.join(stateDir, "tmp"),
       serviceConfigPath,
     },

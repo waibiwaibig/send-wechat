@@ -25,7 +25,7 @@ export type SetupResult = {
         role: "hub";
         relayUrl: string;
         state: string;
-        invitation: string;
+        invitation?: string;
       }
     | {
         role: "client";
@@ -80,11 +80,11 @@ export class SetupCoordinator {
 
   public async setup(options: {
     pair?: string;
+    issueInvitation?: boolean;
     onEvent?: (event: IpcEvent) => Promise<void> | void;
     onVerifyCode?: () => Promise<string | null>;
     onAwaitingMessage?: () => Promise<void> | void;
   }): Promise<SetupResult> {
-    await this.dependencies.prepare();
     const [installation, credential] = await Promise.all([
       this.dependencies.installationStore.load(),
       this.dependencies.credentialStore.load(),
@@ -111,8 +111,10 @@ export class SetupCoordinator {
       };
     }
 
+    await this.dependencies.prepare();
     let hubInstallation = installation;
     let hubCredential = credential;
+    const freshHub = hubInstallation === null && hubCredential === null;
     if (hubInstallation === null && hubCredential === null) {
       const suffix = this.dependencies.randomBytes(4);
       const hubAuthToken = this.dependencies.randomBytes(32);
@@ -178,6 +180,17 @@ export class SetupCoordinator {
       }
       if (state === "awaiting_message" || state === null)
         throw new SetupCoordinatorError("SETUP_INBOUND_TIMEOUT");
+    }
+    if (freshHub || options.issueInvitation !== true) {
+      return {
+        ok: true,
+        command: "setup",
+        result: {
+          role: "hub",
+          relayUrl: hubInstallation.relayUrl,
+          state,
+        },
+      };
     }
     const invitationResponse = await this.dependencies.ipc({
       command: "pairing_invitation",

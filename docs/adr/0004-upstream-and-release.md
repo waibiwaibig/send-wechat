@@ -15,9 +15,10 @@ versions, and protocol changes fail closed. A scheduled GitHub workflow may
 detect upstream changes and open an issue, but it never modifies or merges code.
 
 The architecture targets macOS arm64/x64, Windows x64/arm64, and GNU/Linux
-glibc x64/arm64. Linux requires a Secret Service provider, a systemd user
-manager, and `XDG_RUNTIME_DIR`; Alpine/musl, non-systemd Linux, 32-bit systems,
-FreeBSD, and mixed Windows/WSL operation are not supported.
+glibc x64/arm64. A full GNU/Linux Hub requires a Secret Service provider,
+systemd user manager, and `XDG_RUNTIME_DIR`. WSL and headless GNU/Linux are
+supported as remote clients and do not run a daemon or require Secret Service.
+Alpine/musl, 32-bit systems, and FreeBSD are not supported.
 
 An npm `0.x` preview requires a user-owned Cloudflare deployment, real QR,
 inbound activation, local and remote text/file sends, invitation replay checks,

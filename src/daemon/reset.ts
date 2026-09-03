@@ -2,7 +2,8 @@ import { lstat, readdir, rmdir, unlink } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
 import { NativeCredentialStore } from "../storage/credential-store.js";
-import { NativeRelayCredentialStore } from "../storage/relay-credential-store.js";
+import { selectRelayCredentialStore } from "../storage/client-relay-credential-store.js";
+import { JsonInstallationStore } from "../storage/installation-store.js";
 import type { PlatformPaths } from "../platform/paths.js";
 
 export type ResetDependencies = {
@@ -22,10 +23,22 @@ export async function resetOwnerData(
   paths: PlatformPaths,
   dependencies: ResetDependencies = {},
 ): Promise<void> {
+  const installation =
+    dependencies.credentialStore === undefined ||
+    dependencies.relayCredentialStore === undefined
+      ? await new JsonInstallationStore(paths.installationFile).load()
+      : undefined;
   const credentialStore =
-    dependencies.credentialStore ?? new NativeCredentialStore();
-  const relayCredentialStore =
-    dependencies.relayCredentialStore ?? new NativeRelayCredentialStore();
+    installation?.role === "client"
+      ? { delete: () => Promise.resolve() }
+      : (dependencies.credentialStore ?? new NativeCredentialStore());
+  let relayCredentialStore = dependencies.relayCredentialStore;
+  if (relayCredentialStore === undefined) {
+    relayCredentialStore = selectRelayCredentialStore(
+      paths,
+      installation?.role === "client" ? "client" : "hub",
+    );
+  }
   const credentialDeletion = await Promise.allSettled([
     credentialStore.delete(),
     relayCredentialStore.delete(),

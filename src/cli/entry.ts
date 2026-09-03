@@ -49,11 +49,19 @@ function buildProgram(
   const action =
     (command: string) =>
     async (options: Record<string, unknown> = {}): Promise<void> => {
+      if (command === "setup" && jsonRequested && options.pairStdout === true)
+        throw new CliFailure("USAGE_ERROR", 2);
       await onResult(command, await runCommand(context, command, options));
     };
   program
     .command("setup")
-    .option("--pair <invitation>", "join an existing personal relay")
+    .option("--pair-stdin", "read the pairing invitation from stdin")
+    .addOption(
+      new Option(
+        "--pair-stdout",
+        "write a raw pairing invitation to stdout",
+      ).hideHelp(),
+    )
     .option("--qr-file <path>", "write QR as PNG")
     .action(action("setup"));
   program
@@ -139,6 +147,15 @@ export async function runCli(
       jsonRequested,
       async (command, result) => {
         commandName = command;
+        if (isRecord(result) && result.pairStdout === true) {
+          if (jsonRequested) throw new CliFailure("USAGE_ERROR", 2);
+          const setupResult = isRecord(result.result) ? result.result : {};
+          const invitation = setupResult.invitation;
+          if (typeof invitation !== "string")
+            throw new CliFailure("PAIRING_INVITATION_INVALID", 2);
+          await writeOutput(io.stdout, `${invitation}\n`);
+          return;
+        }
         const finalResult = normalizeFinal(command, result);
         const failed = finalResult.ok === false;
         if (failed) {

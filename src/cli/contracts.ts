@@ -76,7 +76,12 @@ export type SendOptions = {
   file?: string;
   idempotencyKey?: string;
 };
-export type SetupOptions = { pair?: string; qrFile?: string };
+export type SetupOptions = {
+  pair?: string;
+  pairStdin?: boolean;
+  pairStdout?: boolean;
+  qrFile?: string;
+};
 export type RecordValue = Record<string, unknown>;
 
 export class CliFailure extends Error {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertLinuxServiceRuntime,
   prepareOwnerDirectories,
   resolvePlatformPaths,
 } from "../src/platform/paths.js";
@@ -34,6 +35,9 @@ describe("resolvePlatformPaths", () => {
     expect(paths.idempotencyFile).toBe(
       "/Users/alice/Library/Application Support/send-wechat/idempotency.sqlite3",
     );
+    expect(paths.clientCredentialFile).toBe(
+      "/Users/alice/Library/Application Support/send-wechat/client-credential.json",
+    );
     expect(paths.capabilityFile).toBe(
       "/Users/alice/Library/Application Support/send-wechat/capability",
     );
@@ -64,6 +68,9 @@ describe("resolvePlatformPaths", () => {
     expect(paths.installationFile).toBe(
       "/run/user/1000/state/send-wechat/installation.json",
     );
+    expect(paths.clientCredentialFile).toBe(
+      "/run/user/1000/state/send-wechat/client-credential.json",
+    );
     expect(paths.socketPath).toBe(
       "/run/user/1000/send-wechat/send-wechat.sock",
     );
@@ -72,12 +79,30 @@ describe("resolvePlatformPaths", () => {
     );
   });
 
-  it("rejects Linux without XDG_RUNTIME_DIR and rejects unsupported platform/arch", () => {
+  it("resolves a persistent Linux client path without XDG_RUNTIME_DIR", () => {
+    const paths = resolvePlatformPaths({
+      platform: "linux",
+      arch: "x64",
+      env: {},
+      libc: "glibc",
+      homeDir: "/home/alice",
+      username: "alice",
+    });
+
+    expect(paths.runDir).toBe("/home/alice/.local/state/send-wechat/run");
+    expect(paths.clientCredentialFile).toBe(
+      "/home/alice/.local/state/send-wechat/client-credential.json",
+    );
+    expect(paths.linuxRuntimeDir).toBeUndefined();
+    expect(() => assertLinuxServiceRuntime(paths)).toThrowError(
+      /UNSUPPORTED_PLATFORM/,
+    );
+
     expect(() =>
       resolvePlatformPaths({
         platform: "linux",
         arch: "x64",
-        env: {},
+        env: { XDG_RUNTIME_DIR: "relative/run" },
         libc: "glibc",
         homeDir: "/home/alice",
         username: "alice",
@@ -123,6 +148,9 @@ describe("resolvePlatformPaths", () => {
       /^\\\\\.\\pipe\\send-wechat-[0-9a-f]{16}$/,
     );
     expect(paths.installationFile).toBe(paths.stateDir + "\\installation.json");
+    expect(paths.clientCredentialFile).toBe(
+      paths.stateDir + "\\client-credential.json",
+    );
     expect(paths.serviceConfigPath).toBe(paths.stateDir + "\\service.ps1");
   });
 });

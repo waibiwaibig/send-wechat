@@ -5,6 +5,7 @@ import { Readable, Writable } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
+import { PairingInvitations } from "../src/relay/invitation.js";
 import { runCli, type CliDependencies } from "../src/cli/entry.js";
 
 function harness(overrides: CliDependencies = {}) {
@@ -44,6 +45,7 @@ function harness(overrides: CliDependencies = {}) {
         installationFile: "/tmp/send-wechat-state/installation.json",
         idempotencyFile: "/tmp/send-wechat-state/idempotency.sqlite3",
         capabilityFile: "/tmp/send-wechat-state/capability",
+        clientCredentialFile: "/tmp/send-wechat-state/client-credential.json",
         tempDir: "/tmp/send-wechat-state/tmp",
         serviceConfigPath: "/tmp/send-wechat-service.plist",
       },
@@ -80,7 +82,7 @@ function harness(overrides: CliDependencies = {}) {
 }
 
 describe("public CLI", () => {
-  it("uses setup as the only onboarding command and rejects an invalid pairing invitation", async () => {
+  it("uses setup as the only onboarding command and rejects the removed --pair option", async () => {
     let sideEffects = 0;
     const fixture = harness({
       requestIpc: async () => {
@@ -100,7 +102,7 @@ describe("public CLI", () => {
       schemaVersion: 1,
       ok: false,
       command: "setup",
-      error: { code: "PAIRING_INVITATION_INVALID", retryable: false },
+      error: { code: "USAGE_ERROR", retryable: false },
     });
 
     const removed = harness();
@@ -111,11 +113,122 @@ describe("public CLI", () => {
     });
   });
 
+  it("accepts a pairing invitation through --pair-stdin", async () => {
+    let setupOptions: unknown;
+    const invitation = new PairingInvitations().issue(
+      "https://alice.workers.dev",
+    );
+    const fixture = harness({
+      setup: async (options) => {
+        setupOptions = options;
+        return {
+          ok: true,
+          command: "setup",
+          result: { role: "client", state: "paired" },
+        };
+      },
+    });
+    (fixture.deps.io as { stdin: NodeJS.ReadableStream }).stdin = Readable.from(
+      [`\n  ${invitation}  \n`],
+    );
+
+    const code = await runCli(
+      ["--json", "setup", "--pair-stdin"],
+      fixture.deps,
+    );
+
+    expect(code).toBe(0);
+    expect(setupOptions).toEqual({ pair: invitation });
+  });
+
+  it("rejects --pair and --pair-stdin together before setup", async () => {
+    let setupCalls = 0;
+    const fixture = harness({
+      setup: async () => {
+        setupCalls += 1;
+        return { ok: true, command: "setup", state: "paired" };
+      },
+    });
+
+    const code = await runCli(
+      ["--json", "setup", "--pair", "sw1.argv-invitation", "--pair-stdin"],
+      fixture.deps,
+    );
+
+    expect(code).toBe(2);
+    expect(setupCalls).toBe(0);
+    expect(JSON.parse(fixture.output().stdout)).toMatchObject({
+      ok: false,
+      command: "setup",
+      error: { code: "USAGE_ERROR" },
+    });
+  });
+
+  it("streams an existing Hub invitation as raw stdout for SSH handoff", async () => {
+    const invitation = new PairingInvitations().issue(
+      "https://alice.workers.dev",
+    );
+    const fixture = harness({
+      setup: async () => ({
+        ok: true,
+        command: "setup",
+        result: {
+          role: "hub",
+          relayUrl: "https://alice.workers.dev",
+          state: "ready",
+          invitation,
+        },
+      }),
+    });
+
+    const code = await runCli(["setup", "--pair-stdout"], fixture.deps);
+
+    expect(code).toBe(0);
+    expect(fixture.output().stdout).toBe(`${invitation}\n`);
+    expect(fixture.output().stderr).toBe("");
+  });
+
+  it("does not allow raw invitation streaming in JSON mode", async () => {
+    let setupCalls = 0;
+    const invitation = new PairingInvitations().issue(
+      "https://alice.workers.dev",
+    );
+    const fixture = harness({
+      setup: async () => {
+        setupCalls += 1;
+        return {
+          ok: true,
+          command: "setup",
+          result: {
+            role: "hub",
+            relayUrl: "https://alice.workers.dev",
+            state: "ready",
+            invitation,
+          },
+        };
+      },
+    });
+
+    const code = await runCli(
+      ["--json", "setup", "--pair-stdout"],
+      fixture.deps,
+    );
+
+    expect(code).toBe(2);
+    expect(setupCalls).toBe(0);
+    expect(fixture.output().stdout).not.toContain(invitation);
+    expect(JSON.parse(fixture.output().stdout)).toMatchObject({
+      ok: false,
+      command: "setup",
+      error: { code: "USAGE_ERROR" },
+    });
+  });
+
   it("exposes the package version", async () => {
     const fixture = harness();
     const code = await runCli(["--version"], fixture.deps);
     expect(code).toBe(0);
-    expect(fixture.output().stdout).toBe("0.1.0-rc.1\n");
+    expect(fixture.output().stdout).toBe("0.1.0-rc.2\n");
     expect(fixture.output().stderr).toBe("");
   });
 
@@ -221,14 +334,16 @@ describe("public CLI", () => {
     expect(fixture.output().stderr).toContain("QR");
     expect(fixture.output().stderr).toContain("login: wait");
     expect(fixture.output().stderr).toContain(
-      "bot 不会回复，收到后 setup 会自动继续",
+      "收到后 bot 会自动回复‘已连接’，setup 会继续",
     );
     expect(
-      fixture.output().stderr.match(/bot 不会回复，收到后 setup 会自动继续/g),
+      fixture
+        .output()
+        .stderr.match(/收到后 bot 会自动回复‘已连接’，setup 会继续/g),
     ).toHaveLength(1);
   });
 
-  it("prints the Hub pairing invitation in human setup output", async () => {
+  it("does not print the Hub pairing invitation in human setup output", async () => {
     const fixture = harness({
       setup: async () => ({
         ok: true,
@@ -242,8 +357,33 @@ describe("public CLI", () => {
       }),
     });
     await expect(runCli(["setup"], fixture.deps)).resolves.toBe(0);
-    expect(fixture.output().stdout).toContain("sw1.copy-this-invitation");
-    expect(fixture.output().stdout).toContain("10 分钟");
+    expect(fixture.output().stdout).toBe("Hub 已就绪。\n");
+    expect(fixture.output().stdout).not.toContain("sw1.copy-this-invitation");
+  });
+
+  it("does not expose an invitation when fresh setup returns a ready Hub", async () => {
+    const result = {
+      ok: true,
+      command: "setup",
+      result: {
+        role: "hub",
+        relayUrl: "https://alice.workers.dev",
+        state: "ready",
+      },
+    };
+    const jsonFixture = harness({ setup: async () => result });
+    await expect(runCli(["--json", "setup"], jsonFixture.deps)).resolves.toBe(
+      0,
+    );
+    expect(jsonFixture.output().stdout).not.toContain("sw1.");
+    expect(JSON.parse(jsonFixture.output().stdout)).not.toHaveProperty(
+      "result.invitation",
+    );
+
+    const humanFixture = harness({ setup: async () => result });
+    await expect(runCli(["setup"], humanFixture.deps)).resolves.toBe(0);
+    expect(humanFixture.output().stdout).toBe("Hub 已就绪。\n");
+    expect(humanFixture.output().stdout).not.toContain("sw1.");
   });
 
   it("creates a QR file exclusively and refreshes only its own file", async () => {

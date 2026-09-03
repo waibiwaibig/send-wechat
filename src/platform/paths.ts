@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { lstatSync } from "node:fs";
 import { chmod, lstat, mkdir, stat } from "node:fs/promises";
 import * as path from "node:path";
 
@@ -24,6 +25,9 @@ export type PlatformPaths = {
   readonly installationFile: string;
   readonly idempotencyFile: string;
   readonly capabilityFile: string;
+  readonly clientCredentialFile: string;
+  /** Linux only: the user runtime directory required by systemd/Hub IPC. */
+  readonly linuxRuntimeDir?: string;
   readonly tempDir: string;
   readonly serviceConfigPath: string;
 };
@@ -111,6 +115,7 @@ function resolvePosixPaths(
   let logDir: string;
   let runDir: string;
   let serviceConfigPath: string;
+  let runtimeDir: string | undefined;
 
   if (platform === "darwin") {
     if (!path.posix.isAbsolute(homeDir))
@@ -130,20 +135,24 @@ function resolvePosixPaths(
       env.XDG_STATE_HOME === undefined || env.XDG_STATE_HOME.length === 0
         ? join(homeDir, ".local", "state")
         : env.XDG_STATE_HOME;
-    const runtimeDir = env.XDG_RUNTIME_DIR;
-    if (runtimeDir === undefined || runtimeDir.length === 0) {
-      unsupported("XDG_RUNTIME_DIR is required on Linux");
-    }
+    const configuredRuntimeDir = env.XDG_RUNTIME_DIR;
+    runtimeDir =
+      configuredRuntimeDir === undefined || configuredRuntimeDir.length === 0
+        ? undefined
+        : configuredRuntimeDir;
     if (
       !path.posix.isAbsolute(homeDir) ||
       !path.posix.isAbsolute(stateHome) ||
-      !path.posix.isAbsolute(runtimeDir)
+      (runtimeDir !== undefined && !path.posix.isAbsolute(runtimeDir))
     ) {
       unsupported("Linux home and XDG directories must be absolute");
     }
     stateDir = join(stateHome, "send-wechat");
     logDir = join(stateDir, "logs");
-    runDir = join(runtimeDir, "send-wechat");
+    runDir =
+      runtimeDir !== undefined && runtimeDir.length > 0
+        ? join(runtimeDir, "send-wechat")
+        : join(stateDir, "run");
     serviceConfigPath = join(
       homeDir,
       ".config",
@@ -167,6 +176,10 @@ function resolvePosixPaths(
     installationFile: join(stateDir, "installation.json"),
     idempotencyFile: join(stateDir, "idempotency.sqlite3"),
     capabilityFile: join(stateDir, "capability"),
+    clientCredentialFile: join(stateDir, "client-credential.json"),
+    ...(platform === "linux" && runtimeDir !== undefined
+      ? { linuxRuntimeDir: runtimeDir }
+      : {}),
     tempDir: join(stateDir, "tmp"),
     serviceConfigPath,
   };
@@ -229,9 +242,38 @@ export function resolvePlatformPaths(
     installationFile: join(stateDir, "installation.json"),
     idempotencyFile: join(stateDir, "idempotency.sqlite3"),
     capabilityFile: join(stateDir, "capability"),
+    clientCredentialFile: join(stateDir, "client-credential.json"),
     tempDir: join(stateDir, "tmp"),
     serviceConfigPath: join(stateDir, "service.ps1"),
   };
+}
+
+/**
+ * Linux Hub/service operations require a real user runtime directory. Client
+ * operations use persistent owner-only state paths and do not need this gate.
+ */
+export function assertLinuxServiceRuntime(paths: PlatformPaths): void {
+  if (paths.platform !== "linux") return;
+  const runtimeDir = paths.linuxRuntimeDir;
+  if (runtimeDir === undefined)
+    throw new UnsupportedPlatformError(
+      "Linux user runtime directory is unavailable",
+    );
+  try {
+    const metadata = lstatSync(runtimeDir);
+    if (
+      metadata.isSymbolicLink() ||
+      !metadata.isDirectory() ||
+      (metadata.mode & 0o077) !== 0 ||
+      (typeof process.getuid === "function" &&
+        metadata.uid !== process.getuid())
+    )
+      throw new Error("unsafe Linux user runtime directory");
+  } catch {
+    throw new UnsupportedPlatformError(
+      "Linux user runtime directory is unavailable",
+    );
+  }
 }
 
 const realFilesystem: PlatformFilesystem = {

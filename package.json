@@ -1,6 +1,6 @@
 {
   "name": "send-wechat",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "description": "Send text or files to one explicitly bound Weixin user from the command line.",
   "keywords": [
     "wechat",

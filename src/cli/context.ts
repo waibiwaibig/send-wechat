@@ -24,6 +24,7 @@ import {
 } from "../ipc/transport.js";
 import { currentPlatformPaths } from "../platform/current.js";
 import {
+  assertLinuxServiceRuntime,
   prepareOwnerDirectories,
   type PlatformPaths,
   type SupportedPlatform,
@@ -50,8 +51,8 @@ import {
   SetupCoordinatorError,
 } from "../setup/coordinator.js";
 import { NativeCredentialStore } from "../storage/credential-store.js";
+import { selectRelayCredentialStore } from "../storage/client-relay-credential-store.js";
 import { JsonInstallationStore } from "../storage/installation-store.js";
-import { NativeRelayCredentialStore } from "../storage/relay-credential-store.js";
 import {
   type CliDependencies,
   type CliIO,
@@ -127,6 +128,7 @@ export class CliContext {
       this.serviceValue = this.dependencies.serviceManager;
       return this.serviceValue;
     }
+    assertLinuxServiceRuntime(this.getPaths());
     const info = userInfo();
     const uid =
       typeof process.getuid === "function" ? process.getuid() : info.uid;
@@ -185,7 +187,10 @@ export class CliContext {
     ).load();
     if (installation === null || installation.role === "hub")
       return await this.ipc(payload, filePath);
-    const credential = await new NativeRelayCredentialStore().load();
+    const credential = await selectRelayCredentialStore(
+      this.getPaths(),
+      "client",
+    ).load();
     if (
       credential === null ||
       credential.role !== "client" ||
@@ -310,8 +315,8 @@ export class CliContext {
       await writeOutput(
         this.io.stderr,
         this.language === "zh-CN"
-          ? "扫码成功。请现在向这个 bot 发送任意消息；bot 不会回复，收到后 setup 会自动继续。\n"
-          : "QR login confirmed. Send any message to this bot now; it will not reply, and setup will continue automatically once received.\n",
+          ? "扫码成功。请现在向这个 bot 发送任意消息；收到后 bot 会自动回复‘已连接’，setup 会继续。\n"
+          : "QR login confirmed. Send any message to this bot now; it will send an automatic ‘connected’ acknowledgement and setup will continue.\n",
       );
     };
     const onEvent = async (event: IpcEvent): Promise<void> => {
@@ -333,6 +338,9 @@ export class CliContext {
       );
 
     const paths = this.getPaths();
+    const existingInstallation = await this.installation();
+    const clientFlow =
+      options.pair !== undefined || existingInstallation?.role === "client";
     const provisioner = new CloudflareProvisioner({
       temporaryRoot: paths.tempDir,
       selectAccount: async (accounts) =>
@@ -351,11 +359,22 @@ export class CliContext {
     });
     const coordinator = new SetupCoordinator({
       installationStore: new JsonInstallationStore(paths.installationFile),
-      credentialStore: new NativeRelayCredentialStore(),
-      prepare: async () => await this.prepareInstall(),
+      credentialStore: selectRelayCredentialStore(
+        paths,
+        clientFlow ? "client" : "hub",
+      ),
+      prepare: async () => {
+        if (!clientFlow) await this.prepareInstall();
+      },
       provision: async (input) => await provisioner.provision(input),
       deprovision: async (input) => await provisioner.deprovision(input),
-      service: this.getServiceManager(),
+      service: clientFlow
+        ? {
+            status: () => Promise.resolve({ installed: false, running: false }),
+            install: () => Promise.resolve(),
+            start: () => Promise.resolve(),
+          }
+        : this.getServiceManager(),
       ipc: async (payload, eventHandler, verifyCode) =>
         await this.setupIpc(payload, eventHandler, verifyCode),
       pairDevice: async (invitation) => {
@@ -394,6 +413,7 @@ export class CliContext {
     });
     return await coordinator.setup({
       ...(options.pair === undefined ? {} : { pair: options.pair }),
+      ...(options.pairStdout === true ? { issueInvitation: true } : {}),
       onEvent,
       onVerifyCode,
       onAwaitingMessage,
@@ -448,9 +468,14 @@ export class CliContext {
       await this.dependencies.resetOwnerData(this.getPaths());
       return;
     }
-    await resetOwnerData(this.getPaths(), {
+    const paths = this.getPaths();
+    const installation = await this.installation();
+    await resetOwnerData(paths, {
       credentialStore: new NativeCredentialStore(),
-      relayCredentialStore: new NativeRelayCredentialStore(),
+      relayCredentialStore: selectRelayCredentialStore(
+        paths,
+        installation?.role === "client" ? "client" : "hub",
+      ),
     });
   }
 

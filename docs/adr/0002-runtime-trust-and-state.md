@@ -23,9 +23,14 @@ device credentials in the native credential store. It persists only
 owner-readable non-message state: the local role, binding identifiers,
 validated Weixin and relay URLs, Cloudflare account ID and Worker name, polling
 cursor, timestamps, authorized device identifiers, reminder state, idempotency
-metadata, and the IPC capability. A
-remote client keeps only its own relay credential in its native credential
-store and non-secret role/endpoint metadata in owner-readable state.
+metadata, and the IPC capability. A remote client keeps only its own relay
+credential and non-secret role/endpoint metadata. macOS and Windows clients use
+their native credential store. A GNU/Linux client, including WSL and headless
+SSH Linux, uses a strict owner-only credential file whose directory mode is
+`0700` and file mode is `0600`. It rejects symlinks, non-owner files, broader
+permissions, unknown schema, oversized input, and Hub-role records. GNU/Linux
+Hub credentials remain in Secret Service. Credential storage is selected by
+platform and role; there is no fallback reader between stores.
 
 Small mutable state uses atomically replaced JSON. The seven-day idempotency
 ledger remains on the Hub and uses Node.js 24's built-in SQLite module. There is

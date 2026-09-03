@@ -40,13 +40,21 @@ Weixin 凭据路径的信任边界。远端设备与 Hub 间的应用层密文�
 
 ## 本机凭据与 IPC
 
-- Weixin binding 和个人 Relay 分别使用系统原生凭据库中的固定独立条目；没有明文或
-  环境变量 credential fallback。
+- Hub 的 Weixin binding 和个人 Relay 使用系统原生凭据库中的固定独立条目。macOS 与
+  Windows 远端客户端也使用原生凭据库。
+- GNU/Linux 远端客户端只在 owner-only 文件中保存自己的 device ID/key；父目录必须是
+  `0700`，文件必须是 `0600`。读取时拒绝符号链接、非当前 owner、过宽权限、超限内容、
+  未知 schema 和 Hub 凭据。该选择由平台与角色固定，不读取另一个存储作为 fallback。
+- 凭据不来自环境变量；日志、argv、聊天、截图和 shell history 不得包含邀请或凭据。
 - 非秘密状态采用 owner-only、严格 schema、原子替换的 JSON；Hub 幂等账本是固定 schema
   SQLite。未知版本不迁移、不 fallback。
 - Hub IPC 使用 owner-scoped Unix socket（macOS/Linux）或用户专属 Windows named pipe，
   并要求 owner-readable 随机 capability；CLI/daemon 版本必须完全一致。
 - 日志只允许安全元数据，不记录消息、文件内容、QR、token、邀请或密钥。
+
+Agent 可以执行用户已明确请求的安装、诊断和安全配置。Cloudflare 授权/账户选择、
+Weixin QR/验证码/首条激活消息、系统安全存储解锁、多设备决定、更新授权和 reset 确认
+仍由用户完成。Agent 不得索取密码；密码只进入操作系统提供的隐藏输入界面。
 
 binding 与本机角色不可变。Hub `reset` 先确认删除记录的 Cloudflare Worker；失败则保留
 本地 Relay 管理状态。成功后才停止服务并删除两类钥匙串凭据、状态、日志和临时文件。

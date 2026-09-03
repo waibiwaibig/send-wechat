@@ -19,6 +19,7 @@ const fixturePaths: PlatformPaths = {
   installationFile: "/tmp/send-wechat-context-state/installation.json",
   idempotencyFile: "/tmp/send-wechat-context-state/idempotency.sqlite3",
   capabilityFile: "/tmp/send-wechat-context-state/capability",
+  clientCredentialFile: "/tmp/send-wechat-context-state/client-credential.json",
   tempDir: "/tmp/send-wechat-context-state/tmp",
   serviceConfigPath: "/tmp/send-wechat-context.plist",
 };

@@ -29,6 +29,12 @@ one remote client to establish its own credential. The Hub, not the relay,
 stores device authorization and consumes invitations. Expired, forged, and
 replayed invitations fail closed.
 
+A fresh Hub setup does not create an invitation. After the user chooses to add
+a device, an Agent streams the invitation directly from the Hub's hidden
+pairing output into the remote client's setup stdin. The invitation is never a
+command argument and must not appear in chat, shell history, normal logs, or
+screenshots.
+
 All application frames are encrypted and authenticated between the remote
 client and Hub. Relay routing metadata, ciphertext size, timing, and source IP
 remain visible to Cloudflare. HTTPS alone is not described as end-to-end

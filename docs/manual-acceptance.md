@@ -21,7 +21,7 @@
 npm run check
 npm pack
 ACCEPT_PREFIX="$(mktemp -d /tmp/send-wechat-acceptance.XXXXXX)"
-npm install --global --prefix "$ACCEPT_PREFIX" ./send-wechat-0.1.0-rc.1.tgz
+npm install --global --prefix "$ACCEPT_PREFIX" ./send-wechat-0.1.0-rc.2.tgz
 export PATH="$ACCEPT_PREFIX/bin:$PATH"
 node --version
 send-wechat --version
@@ -38,7 +38,7 @@ send-wechat setup
    `workers.dev`、一个 SQLite Durable Object，并且没有 custom domain/route。
 3. 扫描 Weixin QR；若 Tencent 要求数字验证码，只输入 Tencent 展示的验证码。
 4. 给新出现的 ClawBot 发一条非敏感消息；确认只收到一条“已连接”自动回复，`setup`
-   随后完成并打印 10 分钟邀请。再发一条消息续期时不应重复收到连接确认。
+   随后完成且不生成设备邀请。再发一条消息续期时不应重复收到连接确认。
 5. 运行 `send-wechat doctor` 与 `send-wechat --json status`，确认 Hub/Relay/凭据库/IPC
    正常且状态为 `ready`。
 6. 分别执行文本、stdin、文件与同 key 去重测试；在 Weixin 客户端确认每项只收到一次：
@@ -57,9 +57,12 @@ send-wechat --json send --text 'send-wechat acceptance' --idempotency-key accept
 同一操作系统用户的角色不可变，所以不能只改 `$HOME` 来伪造第二台设备；系统钥匙串
 仍会是同一个信任主体。请使用另一台电脑、VM，或本 Mac 的独立 macOS 用户账户。
 
-1. Hub 再运行 `send-wechat setup`，复制它打印的完整 `setup --pair` 命令。
-2. 新设备/新系统用户从同一 tarball 安装并执行该命令；不应安装后台服务、显示 QR 或
-   请求 Cloudflare OAuth。
+1. Hub 使用无 shell trace 的直接管道运行
+   `send-wechat setup --pair-stdout | ssh TARGET 'send-wechat setup --pair-stdin'`。证据、
+   终端输出和命令行中不得出现邀请全文。
+2. 新设备/新系统用户从同一 tarball 安装，接收端执行
+   `send-wechat setup --pair-stdin`；不应安装后台服务、创建 IPC capability、显示 QR、
+   请求 Cloudflare OAuth，或把邀请写入 argv/history/log。
 3. 远端运行 `doctor`、`status`、文本发送和一个大于 512 KiB 的非敏感文件发送；Hub
    与 Weixin 客户端确认文本/文件各一次，Cloudflare dashboard 不应出现 payload 存储。
 4. 重放已消费邀请以及使用改动一个字符的邀请，均应失败且不能新增设备。
@@ -81,13 +84,16 @@ send-wechat --json send --text 'send-wechat acceptance' --idempotency-key accept
 ## Windows 与 GNU/Linux
 
 在 Windows x64/arm64、GNU/Linux glibc x64/arm64 各重复“首次 Hub”或“真实多设备”
-流程至少一次，并验证当前用户服务的安装、重启和开机恢复。Linux 同时确认 Secret
-Service provider、systemd user manager 与 `XDG_RUNTIME_DIR`。Alpine/musl、非 systemd
-Linux、32 位、FreeBSD、Windows/WSL 混合运行不进入支持矩阵。
+流程至少一次，并验证 Hub 当前用户服务的安装、重启和开机恢复。GNU/Linux Hub 同时
+确认 Secret Service provider、systemd user manager 与 `XDG_RUNTIME_DIR`。WSL 与
+headless GNU/Linux 只执行远端客户端流程，确认没有 Secret Service、systemd user service
+或图形会话时仍可配对、status、doctor、发送与 reset。Alpine/musl、32 位和 FreeBSD
+不进入支持矩阵。
 
 | 平台/角色                        | setup/OAuth/QR | Relay/重连 | 文本/文件/去重 | 22h/24h | reset | 日期与脱敏证据 |
 | -------------------------------- | -------------- | ---------- | -------------- | ------- | ----- | -------------- |
 | macOS Hub                        | [ ]            | [ ]        | [ ]            | [ ]     | [ ]   |                |
 | 独立 macOS 用户或第二设备 Client | [ ]            | [ ]        | [ ]            | N/A     | [ ]   |                |
-| Windows                          | [ ]            | [ ]        | [ ]            | [ ]     | [ ]   |                |
-| GNU/Linux glibc                  | [ ]            | [ ]        | [ ]            | [ ]     | [ ]   |                |
+| Windows Hub/Client               | [ ]            | [ ]        | [ ]            | [ ]     | [ ]   |                |
+| GNU/Linux glibc Hub              | [ ]            | [ ]        | [ ]            | [ ]     | [ ]   |                |
+| WSL/headless GNU/Linux Client    | N/A            | [ ]        | [ ]            | N/A     | [ ]   |                |

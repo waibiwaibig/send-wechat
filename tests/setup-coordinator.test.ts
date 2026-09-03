@@ -8,7 +8,7 @@ import type { InstallationState } from "../src/storage/installation-store.js";
 import type { RelayCredential } from "../src/storage/relay-credential-store.js";
 
 describe("one-command setup coordinator", () => {
-  it("provisions a fresh personal Hub, starts it, binds Weixin, and returns an invitation", async () => {
+  it("provisions a fresh personal Hub, starts it, and binds Weixin without issuing an invitation", async () => {
     let installation: InstallationState | null = null;
     let credential: RelayCredential | null = null;
     const calls: string[] = [];
@@ -81,7 +81,6 @@ describe("one-command setup coordinator", () => {
         role: "hub",
         relayUrl: "https://send-wechat-04040404.alice.workers.dev",
         state: "ready",
-        invitation: "sw1.hub-invitation",
       },
     });
     expect(installation).toEqual({
@@ -106,7 +105,6 @@ describe("one-command setup coordinator", () => {
       "ipc:status",
       "ipc:login",
       "ipc:status",
-      "ipc:pairing_invitation",
     ]);
   });
 
@@ -114,6 +112,7 @@ describe("one-command setup coordinator", () => {
     let installation: InstallationState | null = null;
     let credential: RelayCredential | null = null;
     const install = vi.fn();
+    const prepare = vi.fn();
     const ipc = vi.fn();
     const pairDevice = vi.fn(async () => ({
       relayUrl: "https://alice.workers.dev",
@@ -140,7 +139,7 @@ describe("one-command setup coordinator", () => {
           credential = null;
         },
       },
-      prepare: async () => undefined,
+      prepare,
       provision: vi.fn(),
       deprovision: vi.fn(),
       service: {
@@ -166,6 +165,7 @@ describe("one-command setup coordinator", () => {
       },
     });
     expect(pairDevice).toHaveBeenCalledWith("sw1.invitation");
+    expect(prepare).not.toHaveBeenCalled();
     expect(installation).toEqual({
       schemaVersion: 1,
       role: "client",
@@ -177,7 +177,7 @@ describe("one-command setup coordinator", () => {
     expect(ipc).not.toHaveBeenCalled();
   });
 
-  it("reuses an existing Hub to issue an invitation and rejects inconsistent state", async () => {
+  it("reuses an existing Hub and issues an invitation only when requested", async () => {
     const installation: InstallationState = {
       schemaVersion: 1,
       role: "hub",
@@ -227,10 +227,24 @@ describe("one-command setup coordinator", () => {
           role: "hub",
           relayUrl: "https://alice.workers.dev",
           state: "ready",
-          invitation: "sw1.existing",
         },
       },
     );
+    expect(ipc).toHaveBeenCalledTimes(1);
+
+    ipc.mockClear();
+    await expect(
+      new SetupCoordinator(dependencies).setup({ issueInvitation: true }),
+    ).resolves.toEqual({
+      ok: true,
+      command: "setup",
+      result: {
+        role: "hub",
+        relayUrl: "https://alice.workers.dev",
+        state: "ready",
+        invitation: "sw1.existing",
+      },
+    });
     expect(ipc).toHaveBeenCalledTimes(2);
 
     await expect(

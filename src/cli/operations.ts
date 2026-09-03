@@ -284,15 +284,44 @@ export async function runCommand(
         await context.dispatch({ command: "status" }),
       );
     case "setup": {
-      const setupOptions = options as unknown as SetupOptions;
-      if (setupOptions.pair !== undefined) {
+      const optionsWithPair = options as unknown as SetupOptions;
+      if (
+        (optionsWithPair.pair !== undefined &&
+          optionsWithPair.pairStdin === true) ||
+        (optionsWithPair.pairStdout === true &&
+          (optionsWithPair.pair !== undefined ||
+            optionsWithPair.pairStdin === true))
+      )
+        failure("USAGE_ERROR", 2);
+      const pair =
+        optionsWithPair.pairStdin === true
+          ? (await context.readStdin()).trim()
+          : optionsWithPair.pair;
+      if (pair !== undefined) {
         try {
-          parsePairingInvitation(setupOptions.pair);
+          parsePairingInvitation(pair);
         } catch {
           failure("PAIRING_INVITATION_INVALID", 2);
         }
       }
+      const setupOptions: SetupOptions = {
+        ...(pair === undefined ? {} : { pair }),
+        ...(optionsWithPair.pairStdout === true ? { pairStdout: true } : {}),
+        ...(optionsWithPair.qrFile === undefined
+          ? {}
+          : { qrFile: optionsWithPair.qrFile }),
+      };
       const result = await context.setup(setupOptions);
+      if (optionsWithPair.pairStdout === true) {
+        if (
+          !isRecord(result) ||
+          result.ok !== true ||
+          !isRecord(result.result) ||
+          typeof result.result.invitation !== "string"
+        )
+          failure("PAIRING_INVITATION_INVALID", 2);
+        return { ...result, pairStdout: true };
+      }
       return safeDaemonResult(command, result);
     }
     case "send":
@@ -354,15 +383,8 @@ export function humanSuccess(
   if (command === "setup") {
     const details =
       isRecord(result) && isRecord(result.result) ? result.result : null;
-    if (
-      details !== null &&
-      details.role === "hub" &&
-      typeof details.invitation === "string"
-    ) {
-      return language === "zh-CN"
-        ? `Hub 已就绪。请在 10 分钟内到新设备运行：\nsend-wechat setup --pair '${details.invitation}'\n`
-        : `Hub is ready. Within 10 minutes, run this on the new device:\nsend-wechat setup --pair '${details.invitation}'\n`;
-    }
+    if (details !== null && details.role === "hub")
+      return language === "zh-CN" ? "Hub 已就绪。\n" : "Hub is ready.\n";
     return language === "zh-CN"
       ? "设备已连接到个人 Relay。\n"
       : "This device is connected to the personal relay.\n";

@@ -18,6 +18,9 @@ scanning its QR code. It is not a general Weixin client or an OpenClaw plugin.
   to Weixin. One binding has exactly one Hub.
 - **remote client**: an authorized machine that owns only a device credential
   and forwards CLI requests to the Hub; it never binds to Weixin.
+- **Agent-first onboarding**: the public setup flow in which an Agent performs
+  installation, diagnostics, and safe configuration, pausing only for a real
+  account, identity, secret-entry, or device-choice action by the user.
 - **personal relay**: a Worker and Durable Object deployed into the binding
   user's own Cloudflare account. It relays encrypted live frames and has no
   persistent message store.
@@ -77,8 +80,11 @@ general recipient interface.
 ### Platform modules
 
 Credential-store and background-service interfaces are the platform seams.
-Their adapters use native per-user facilities on macOS, Windows, and GNU/Linux.
-There is no plaintext credential adapter or process-environment fallback.
+The Hub uses native per-user credential facilities on macOS, Windows, and
+GNU/Linux. A Linux remote client uses one strict owner-only device-credential
+file so WSL and headless SSH sessions do not depend on Secret Service. That
+file can contain only the remote client's own relay credential. There is no
+process-environment credential source or role-crossing fallback.
 
 ## Trust model
 
@@ -95,8 +101,7 @@ There is no plaintext credential adapter or process-environment fallback.
 
 ## Product state
 
-The repository is pre-release. The local automated acceptance suite currently
-passes, including the real Workers runtime harness. A real user-owned
-Cloudflare deployment, QR login, inbound activation, cross-device pairing, and
-real Weixin text/file delivery remain manual gates requiring the repository
-owner's explicit action before publication.
+The repository is pre-release. Local automated tests and the Workers runtime
+harness cover deterministic seams. A real user-owned Cloudflare deployment,
+QR login, inbound activation, cross-device pairing, platform services, and real
+Weixin text/file delivery remain distinct manual acceptance gates.
