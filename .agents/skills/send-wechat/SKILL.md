@@ -1,15 +1,14 @@
 ---
 name: send-wechat
-description: Install, configure, diagnose, or use the send-wechat Agent-first CLI from its GitHub repository; includes QR onboarding, user-owned relay setup, remote-device pairing, and authorized sends to one bound Weixin user.
+description: Send WeChat/Weixin messages or files with send-wechat when the user asks to 发微信, send a WeChat/Weixin message or file, or install, set up, pair, or diagnose send-wechat.
 ---
 
 # send-wechat
 
-Read the repository `README.md` first. Treat it as the public product and onboarding contract.
-
 ## Drive setup
 
-When the user explicitly asks to install or set up this repository:
+When the user explicitly asks to install or set up this repository, first read the public onboarding
+contract at https://github.com/waibiwaibig/send-wechat#readme. Then:
 
 1. Establish the actual control plane and target platform before running platform commands. Distinguish
    native Windows from a Linux shell reached through SSH or WSL.
@@ -27,8 +26,8 @@ When the user explicitly asks to install or set up this repository:
    `send-wechat setup --pair-stdin`. For a POSIX SSH target, use a direct pipeline equivalent to
    `send-wechat setup --pair-stdout | ssh TARGET 'send-wechat setup --pair-stdin'`; do not capture or
    echo the intermediate stdout. Never place an invitation in argv, chat, shell history, a normal log,
-   or a screenshot. Without SSH, tell the Agent on the target device what outcome to complete and let
-   the two Agents coordinate; the user should only perform a genuine account/security action.
+   or a screenshot. Without SSH, tell the Agent on the target device what outcome to complete and let the
+   two Agents coordinate; the user should only perform a genuine account/security action.
 7. Finish only after `doctor` and `status` confirm the intended machine is usable.
 
 Do not request a password or credential in chat. Let the user type a password only into a native hidden

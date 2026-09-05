@@ -2,7 +2,11 @@
 
 把下面这句话发给 Codex、Claude Code 或其他能运行终端命令的 Agent：
 
-> 请安装并设置 https://github.com/waibiwaibig/send-wechat
+> 请安装并设置 https://github.com/waibiwaibig/send-wechat。与此同时，把仓库中的
+> `.agents/skills/send-wechat/` 整个技能目录安装到当前 Agent 的用户级 skills 目录；每个
+> Agent 使用其官方规定的目录，Codex 的示例路径是 `$HOME/.agents/skills/send-wechat/`。不要只
+> 复制 `SKILL.md`，以保留未来的技能资源。保持技能可自动调用，并在一个全新的 Agent 任务中
+> 做一次只验证技能发现、不实际发送消息的路由检查。只有技能安装和新任务验证都通过后，才算完成。
 
 Agent 会完成安装、环境检查、个人 Relay、后台服务和诊断。你只在这些步骤接管：
 
@@ -27,20 +31,25 @@ Agent 会完成安装、环境检查、个人 Relay、后台服务和诊断。�
 用户明确说“安装”或“设置”并给出本仓库链接后，Agent 应继续执行安全、可撤销的步骤，
 无需让用户复制命令：
 
-1. 确认当前主机、目标主机、操作系统和 CPU；安装用户级 Node.js 24，再安装 GitHub
+1. 先把本仓库中的 `.agents/skills/send-wechat/` 整个技能目录安装到当前 Agent 的用户级
+   skills 目录，按该 Agent 的官方路径执行；Codex 的示例路径是
+   `$HOME/.agents/skills/send-wechat/`。不要只复制 `SKILL.md`，以保留未来的技能资源。
+   保持技能可自动调用，并在全新的 Agent 任务中完成一次只验证技能发现、不发送消息的路由检查。
+   该安装和验证门槛通过前，不得报告本次安装或设置完成。
+2. 确认当前主机、目标主机、操作系统和 CPU；安装用户级 Node.js 24，再安装 GitHub
    Releases 中最新的 `.tgz`。若目标是本仓库工作区，依次执行 `npm ci`、`npm run build`
    和 `npm install --global .`；不要把未构建的 GitHub 源码 URL 直接交给 npm。
-2. 运行 `send-wechat status` 和 `send-wechat doctor`，根据结构化错误修复环境；未配置时
+3. 运行 `send-wechat status` 和 `send-wechat doctor`，根据结构化错误修复环境；未配置时
    运行 `setup`。二维码应写入一个新的 owner-only 临时文件并直接展示在对话中。
-3. Cloudflare OAuth/账户选择、QR/验证码/首条入站消息、原生安全存储解锁等需要账户本人
+4. Cloudflare OAuth/账户选择、QR/验证码/首条入站消息、原生安全存储解锁等需要账户本人
    的步骤应暂停并给出一个明确动作；完成后继续，不把后续命令甩回给用户。
-4. Hub 就绪后只问一次是否连接其他设备。若用户拒绝，结束设置且不生成邀请。
-5. 用户同意且 Agent 已有 SSH 时，Agent 在远端安装 CLI，并通过 stdin 传送一次性邀请；
+5. Hub 就绪后只问一次是否连接其他设备。若用户拒绝，结束设置且不生成邀请。
+6. 用户同意且 Agent 已有 SSH 时，Agent 在远端安装 CLI，并通过 stdin 传送一次性邀请；
    POSIX 目标使用不捕获中间输出的直接管道
    `send-wechat setup --pair-stdout | ssh TARGET 'send-wechat setup --pair-stdin'`。邀请不得
    进入聊天、argv、shell history、普通日志或截图。没有 SSH 时，给目标设备上的 Agent
    一段不含长期凭据的交接说明。
-6. 最后运行 `doctor` 与 `status`，只在确认目标设备可调用后报告完成。
+7. 最后运行 `doctor` 与 `status`，只在确认目标设备可调用后报告完成。
 
 Agent 不得索取或展示 Weixin 凭据、Cloudflare token、系统钥匙串内容、device key、邀请
 全文或 IPC capability。系统密码只允许用户在操作系统的隐藏输入界面中填写。更新已配置

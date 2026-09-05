@@ -28,7 +28,7 @@
     "SECURITY.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
-    "skills"
+    ".agents/skills"
   ],
   "publishConfig": {
     "access": "public"
