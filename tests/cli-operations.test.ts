@@ -22,6 +22,12 @@ type FakeContext = {
     stop: () => Promise<void>;
   };
   capability: () => Promise<string>;
+  loadClientCredential: () => Promise<{
+    schemaVersion: 1;
+    role: "client";
+    deviceId: string;
+    deviceKey: string;
+  } | null>;
   confirmReset: () => Promise<string | null>;
   reset: () => Promise<void>;
   deprovisionRelay: () => Promise<void>;
@@ -57,6 +63,7 @@ function context(overrides: Partial<FakeContext> = {}): FakeContext {
       stop: async () => {},
     }),
     capability: async () => "a".repeat(64),
+    loadClientCredential: async () => null,
     confirmReset: async () => "RESET",
     reset: async () => {},
     deprovisionRelay: async () => {},
@@ -297,6 +304,12 @@ describe("CLI operations", () => {
         command: "status",
         result: { state: "ready" },
       }),
+      loadClientCredential: async () => ({
+        schemaVersion: 1,
+        role: "client",
+        deviceId: Buffer.alloc(16, 1).toString("base64url"),
+        deviceKey: Buffer.alloc(32, 2).toString("base64url"),
+      }),
       getServiceManager: service as never,
     });
     await expect(
@@ -309,6 +322,35 @@ describe("CLI operations", () => {
       },
     });
     expect(service).not.toHaveBeenCalled();
+  });
+
+  it("separates a missing client credential from the relay check", async () => {
+    const fake = context({
+      installation: async () => ({
+        schemaVersion: 1,
+        role: "client",
+        relayUrl: "https://alice.workers.dev",
+        deviceId: Buffer.alloc(16, 1).toString("base64url"),
+      }),
+      loadClientCredential: async () => null,
+      dispatch: async () => {
+        throw new Error("relay must not be contacted without local state");
+      },
+    });
+
+    await expect(
+      runCommand(fake as unknown as CliContext, "doctor", {}),
+    ).resolves.toMatchObject({
+      ok: false,
+      checks: {
+        installation: { ok: true, value: "client" },
+        localCredential: {
+          ok: false,
+          code: "RELAY_CREDENTIAL_MISSING",
+        },
+        relay: { ok: false, code: "RELAY_CHECK_BLOCKED" },
+      },
+    });
   });
 
   it("renders human success for every public command and safe deduplication", () => {

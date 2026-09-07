@@ -114,18 +114,18 @@ export class JsonInstallationStore {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     if (process.platform !== "win32") await chmod(directory, 0o700);
     const temporaryPath = `${this.filePath}.${randomUUID()}.tmp`;
-    const handle = await open(
-      temporaryPath,
-      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-      0o600,
-    );
     try {
-      await handle.writeFile(`${JSON.stringify(parsed.data)}\n`, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    try {
+      const handle = await open(
+        temporaryPath,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+        0o600,
+      );
+      try {
+        await handle.writeFile(`${JSON.stringify(parsed.data)}\n`, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
       await rename(temporaryPath, this.filePath);
       if (process.platform !== "win32") await chmod(this.filePath, 0o600);
       await syncDirectory(directory);

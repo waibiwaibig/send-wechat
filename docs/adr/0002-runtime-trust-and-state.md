@@ -24,9 +24,9 @@ owner-readable non-message state: the local role, binding identifiers,
 validated Weixin and relay URLs, Cloudflare account ID and Worker name, polling
 cursor, timestamps, authorized device identifiers, reminder state, idempotency
 metadata, and the IPC capability. A remote client keeps only its own relay
-credential and non-secret role/endpoint metadata. macOS and Windows clients use
-their native credential store. A GNU/Linux client, including WSL and headless
-SSH Linux, uses a strict owner-only credential file whose directory mode is
+credential and non-secret role/endpoint metadata. Windows clients use
+their native credential store. macOS and GNU/Linux clients, including WSL and
+headless SSH sessions, use a strict owner-only credential file whose directory mode is
 `0700` and file mode is `0600`. It rejects symlinks, non-owner files, broader
 permissions, unknown schema, oversized input, and Hub-role records. GNU/Linux
 Hub credentials remain in Secret Service. Credential storage is selected by
@@ -41,7 +41,11 @@ removes the user-owned relay deployment, then stops the daemon and deletes the
 binding, credentials, state, logs, and temporary files. If cloud deletion
 cannot be confirmed, local relay administration state is retained so the user
 can retry. Remote-client `reset` deletes only that device's local credential and
-state. Re-setup requires a new QR binding or a fresh pairing invitation.
+state. Client-only `reset --local` also removes stale local service configuration
+and refuses a known Hub; it never deprovisions the relay. macOS/Linux recovery
+avoids native keyrings; Windows clears its native client relay credential. Old macOS client records are not migrated or read as a fallback; users
+reset locally and pair again. Re-setup requires a new QR binding or a fresh
+pairing invitation.
 
 ## Consequences
 

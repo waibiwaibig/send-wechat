@@ -141,6 +141,58 @@ describe("public CLI", () => {
     expect(setupOptions).toEqual({ pair: invitation });
   });
 
+  it("prompts for a pairing invitation through boolean --pair", async () => {
+    let setupOptions: unknown;
+    const invitation = new PairingInvitations().issue(
+      "https://alice.workers.dev",
+    );
+    const fixture = harness({
+      promptPairingInvitation: async () => invitation,
+      setup: async (options) => {
+        setupOptions = options;
+        return {
+          ok: true,
+          command: "setup",
+          result: { role: "client", state: "paired" },
+        };
+      },
+    });
+
+    const code = await runCli(["--json", "setup", "--pair"], fixture.deps);
+
+    expect(code).toBe(0);
+    expect(setupOptions).toEqual({ pair: invitation });
+    expect(fixture.output().stdout).not.toContain(invitation);
+  });
+
+  it("rejects pair prompt and raw stdout modes before prompting", async () => {
+    let promptCalls = 0;
+    let setupCalls = 0;
+    const fixture = harness({
+      promptPairingInvitation: async () => {
+        promptCalls += 1;
+        return "sw1.never-logged";
+      },
+      setup: async () => {
+        setupCalls += 1;
+        return { ok: true, command: "setup", result: { role: "client" } };
+      },
+    });
+
+    const code = await runCli(
+      ["--json", "setup", "--pair", "--pair-stdout"],
+      fixture.deps,
+    );
+
+    expect(code).toBe(2);
+    expect(promptCalls).toBe(0);
+    expect(setupCalls).toBe(0);
+    expect(JSON.parse(fixture.output().stdout)).toMatchObject({
+      ok: false,
+      error: { code: "USAGE_ERROR" },
+    });
+  });
+
   it("rejects --pair and --pair-stdin together before setup", async () => {
     let setupCalls = 0;
     const fixture = harness({

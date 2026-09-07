@@ -81,10 +81,11 @@ general recipient interface.
 
 Credential-store and background-service interfaces are the platform seams.
 The Hub uses native per-user credential facilities on macOS, Windows, and
-GNU/Linux. A Linux remote client uses one strict owner-only device-credential
-file so WSL and headless SSH sessions do not depend on Secret Service. That
-file can contain only the remote client's own relay credential. There is no
-process-environment credential source or role-crossing fallback.
+GNU/Linux. macOS and Linux remote clients use one strict owner-only device
+credential file so SSH/WSL sessions do not depend on Keychain or Secret Service.
+The file contains only the remote client's own relay credential. Windows clients
+use native storage. There is no process-environment credential source or
+role-crossing fallback.
 
 ## Trust model
 

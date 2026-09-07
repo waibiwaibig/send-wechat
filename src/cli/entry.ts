@@ -55,15 +55,23 @@ function buildProgram(
     };
   program
     .command("setup")
+    .option("--pair", "paste a pairing invitation in the terminal")
     .option("--pair-stdin", "read the pairing invitation from stdin")
     .addOption(
-      new Option(
-        "--pair-stdout",
-        "write a raw pairing invitation to stdout",
-      ).hideHelp(),
+      new Option("--pair-stdout", "write a raw pairing invitation to stdout"),
     )
     .option("--qr-file <path>", "write QR as PNG")
-    .action(action("setup"));
+    .action(async (options: Record<string, unknown>) => {
+      // Commander derives the boolean option key `pair`; normalize it at the
+      // CLI boundary so SetupOptions can keep its internal `pair: string`
+      // invitation value without ever accepting a secret from argv.
+      const normalized = { ...options };
+      if (normalized.pair === true) {
+        delete normalized.pair;
+        normalized.pairPrompt = true;
+      }
+      await action("setup")(normalized);
+    });
   program
     .command("send")
     .option("--text <text>", "text to send")
@@ -73,7 +81,10 @@ function buildProgram(
     .action(action("send"));
   program.command("status").action(action("status"));
   program.command("doctor").action(action("doctor"));
-  program.command("reset").action(action("reset"));
+  program
+    .command("reset")
+    .option("--local", "reset only a remote client's local state")
+    .action(action("reset"));
 
   const service = new Command("service").description(
     "manage the background service",
@@ -167,13 +178,20 @@ export async function runCli(
         if (globalOptions.json === true) {
           await writeOutput(io.stdout, `${JSON.stringify(finalResult)}\n`);
         } else if (failed) {
-          const error = isRecord(finalResult.error) ? finalResult.error : {};
-          const code =
-            typeof error.code === "string" ? error.code : "LOCAL_FAILURE";
-          await writeOutput(
-            io.stderr,
-            `${localizedMessage(code, globalOptions.lang ?? "zh-CN")}\n`,
-          );
+          if (command === "doctor") {
+            await writeOutput(
+              io.stdout,
+              humanSuccess(command, result, globalOptions.lang ?? "zh-CN"),
+            );
+          } else {
+            const error = isRecord(finalResult.error) ? finalResult.error : {};
+            const code =
+              typeof error.code === "string" ? error.code : "LOCAL_FAILURE";
+            await writeOutput(
+              io.stderr,
+              `${localizedMessage(code, globalOptions.lang ?? "zh-CN")}\n`,
+            );
+          }
         } else {
           await writeOutput(
             io.stdout,

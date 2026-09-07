@@ -11,6 +11,64 @@ export type ResetDependencies = {
   readonly relayCredentialStore?: { delete(): Promise<void> };
 };
 
+export class LocalClientResetError extends Error {
+  public constructor(public readonly code: string) {
+    super(code);
+    this.name = "LocalClientResetError";
+  }
+}
+
+export async function assertLocalClientResetAllowed(
+  paths: PlatformPaths,
+): Promise<void> {
+  let installation = null;
+  try {
+    installation = await new JsonInstallationStore(
+      paths.installationFile,
+    ).load();
+  } catch (error) {
+    // A non-directory state root cannot contain an installation file. Keep
+    // the established reset behavior for that isolated filesystem failure;
+    // malformed or unreadable installation files still propagate below.
+    if ((error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
+  }
+  if (installation?.role === "hub")
+    throw new LocalClientResetError("RESET_LOCAL_HUB_STATE");
+  if (
+    (await pathExists(paths.stateFile)) ||
+    (await pathExists(paths.idempotencyFile))
+  )
+    throw new LocalClientResetError("RESET_LOCAL_HUB_STATE");
+}
+
+/**
+ * Remove only state owned by a remote client.
+ *
+ * A local reset is deliberately conservative: a Hub installation, state
+ * document, or idempotency ledger is evidence that this account may own the
+ * Weixin binding, so the operation stops before deleting anything. The
+ * service lifecycle is controlled by the CLI context; this function only
+ * removes the client installation, its file credential, and a stale IPC
+ * capability.
+ */
+export async function resetLocalClientData(
+  paths: PlatformPaths,
+): Promise<void> {
+  await assertLocalClientResetAllowed(paths);
+
+  try {
+    await unlinkOwnedPath(paths.clientCredentialFile);
+    await unlinkOwnedPath(paths.installationFile);
+    await unlinkOwnedPath(paths.capabilityFile);
+  } catch (error) {
+    throw new LocalClientResetError(
+      error instanceof LocalClientResetError
+        ? error.code
+        : "RESET_LOCAL_CLEANUP_FAILED",
+    );
+  }
+}
+
 /**
  * Remove all owner state without touching the platform service definition.
  *
@@ -23,11 +81,17 @@ export async function resetOwnerData(
   paths: PlatformPaths,
   dependencies: ResetDependencies = {},
 ): Promise<void> {
-  const installation =
-    dependencies.credentialStore === undefined ||
-    dependencies.relayCredentialStore === undefined
-      ? await new JsonInstallationStore(paths.installationFile).load()
-      : undefined;
+  // Always inspect the installation role before selecting a credential
+  // backend. A valid client must never cause reset to touch the native
+  // keyring, even when callers inject both dependency ports.
+  let installation = null;
+  try {
+    installation = await new JsonInstallationStore(
+      paths.installationFile,
+    ).load();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
+  }
   const credentialStore =
     installation?.role === "client"
       ? { delete: () => Promise.resolve() }
@@ -52,6 +116,28 @@ export async function resetOwnerData(
   await emptyDirectory(paths.stateDir, preservedPath);
   await emptyDirectory(paths.logDir, preservedPath);
   await emptyDirectory(paths.runDir, preservedPath);
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function unlinkOwnedPath(path: string): Promise<void> {
+  try {
+    const metadata = await lstat(path);
+    if (metadata.isDirectory() && !metadata.isSymbolicLink())
+      throw new LocalClientResetError("RESET_LOCAL_CLEANUP_FAILED");
+    await unlink(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
 }
 
 async function emptyDirectory(

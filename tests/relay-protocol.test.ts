@@ -152,4 +152,60 @@ describe("encrypted remote command protocol", () => {
       RelayProtocolError,
     );
   });
+
+  it("aborts a relay exchange at the configured timeout", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const transport = new RelayHttpTransport({
+      timeoutMs: 10,
+      fetch: async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal ?? undefined;
+          observedSignal = signal;
+          if (signal === undefined) {
+            reject(new Error("missing abort signal"));
+            return;
+          }
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        }),
+    });
+
+    await expect(
+      transport.exchange("https://alice.workers.dev", Buffer.from("frame")),
+    ).rejects.toMatchObject({ code: "RELAY_UNAVAILABLE", retryable: true });
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("maps an aborted response body to a retryable relay failure", async () => {
+    const transport = new RelayHttpTransport({
+      timeoutMs: 10,
+      fetch: async () =>
+        ({
+          ok: true,
+          headers: new Headers({
+            "content-type": "application/octet-stream",
+          }),
+          arrayBuffer: async () => {
+            throw new Error("response body aborted");
+          },
+        }) as unknown as Response,
+    });
+
+    await expect(
+      transport.exchange("https://alice.workers.dev", Buffer.from("frame")),
+    ).rejects.toMatchObject({ code: "RELAY_UNAVAILABLE", retryable: true });
+  });
+
+  it("rejects invalid relay timeout values", () => {
+    expect(() => new RelayHttpTransport({ timeoutMs: 0 })).toThrow(
+      "RELAY_TIMEOUT_INVALID",
+    );
+    expect(() => new RelayHttpTransport({ timeoutMs: 2_147_483_648 })).toThrow(
+      "RELAY_TIMEOUT_INVALID",
+    );
+    expect(() => new RelayHttpTransport({ timeoutMs: 1.5 })).toThrow(
+      "RELAY_TIMEOUT_INVALID",
+    );
+  });
 });

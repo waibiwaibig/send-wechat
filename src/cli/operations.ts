@@ -10,6 +10,7 @@ import {
   failure,
   ensureNodeVersion,
   isRecord,
+  localizedMessage,
   normalizeFinal,
   safeCode,
 } from "./contracts.js";
@@ -93,11 +94,26 @@ async function runSend(
   return safeDaemonResult("send", await context.dispatch(payload, filePath));
 }
 
+type DoctorCheck = { ok: boolean; code?: string; value?: unknown };
+type DoctorChecks = Record<string, DoctorCheck>;
+
+function doctorResult(
+  checks: DoctorChecks,
+  requestId: string | undefined,
+): RecordValue {
+  const ok = Object.values(checks).every((check) => check.ok);
+  return {
+    schemaVersion: 1,
+    ok,
+    command: "doctor",
+    ...(requestId === undefined ? {} : { requestId }),
+    ...(ok ? {} : { error: { code: "DOCTOR_CHECK_FAILED", retryable: false } }),
+    checks,
+  };
+}
+
 async function runDoctor(context: CliContext): Promise<unknown> {
-  const checks: Record<
-    string,
-    { ok: boolean; code?: string; value?: unknown }
-  > = {};
+  const checks: DoctorChecks = {};
   let requestId: string | undefined;
   try {
     ensureNodeVersion(context.nodeVersion());
@@ -113,50 +129,114 @@ async function runDoctor(context: CliContext): Promise<unknown> {
       code: safeCode((error as { code?: unknown }).code),
     };
   }
+  let installation;
   try {
-    const installation = await context.installation();
-    if (installation?.role === "client") {
-      checks.installation = { ok: true, value: "client" };
-      try {
-        const result = await context.dispatch({ command: "status" });
-        const succeeded = isRecord(result) && result.ok === true;
-        checks.relay = {
-          ok: succeeded,
-          ...(succeeded
-            ? {}
-            : {
-                code: safeCode(
-                  isRecord(result) && isRecord(result.error)
-                    ? result.error.code
-                    : "RELAY_CHECK_FAILED",
-                ),
-              }),
-        };
-        if (isRecord(result) && typeof result.requestId === "string")
-          requestId = result.requestId;
-      } catch (error) {
-        checks.relay = {
-          ok: false,
-          code: safeCode((error as { code?: unknown }).code),
-        };
-      }
-      const ok = Object.values(checks).every((check) => check.ok);
-      return {
-        schemaVersion: 1,
-        ok,
-        command: "doctor",
-        ...(requestId === undefined ? {} : { requestId }),
-        ...(ok
-          ? {}
-          : { error: { code: "DOCTOR_CHECK_FAILED", retryable: false } }),
-        checks,
-      };
-    }
+    installation = await context.installation();
   } catch (error) {
     checks.installation = {
       ok: false,
       code: safeCode((error as { code?: unknown }).code),
     };
+    // An unreadable installation is not evidence of an unconfigured Hub.
+    // Stop here so doctor does not fall through to the native Hub keyring.
+    checks.localCredential = {
+      ok: false,
+      code: "INSTALLATION_INCONSISTENT",
+      value: "unreadable",
+    };
+    return doctorResult(checks, requestId);
+  }
+
+  if (installation?.role === "client") {
+    checks.installation = { ok: true, value: "client" };
+    let credential = null;
+    try {
+      credential = await context.loadClientCredential();
+    } catch (error) {
+      checks.localCredential = {
+        ok: false,
+        code: safeCode((error as { code?: unknown }).code),
+      };
+    }
+    if (checks.localCredential === undefined) {
+      if (credential === null) {
+        checks.localCredential = {
+          ok: false,
+          code: "RELAY_CREDENTIAL_MISSING",
+          value: "missing",
+        };
+      } else if (
+        credential.role !== "client" ||
+        credential.deviceId !== installation.deviceId
+      ) {
+        checks.localCredential = {
+          ok: false,
+          code: "INSTALLATION_INCONSISTENT",
+          value: "device-mismatch",
+        };
+      } else {
+        checks.localCredential = { ok: true, value: "available" };
+      }
+    }
+    if (checks.localCredential.ok !== true) {
+      checks.relay = { ok: false, code: "RELAY_CHECK_BLOCKED" };
+      return doctorResult(checks, requestId);
+    }
+    try {
+      const result = await context.dispatch({ command: "status" });
+      const succeeded = isRecord(result) && result.ok === true;
+      checks.relay = {
+        ok: succeeded,
+        ...(succeeded
+          ? {}
+          : {
+              code: safeCode(
+                isRecord(result) && isRecord(result.error)
+                  ? result.error.code
+                  : "RELAY_CHECK_FAILED",
+              ),
+            }),
+      };
+      if (isRecord(result) && typeof result.requestId === "string")
+        requestId = result.requestId;
+    } catch (error) {
+      checks.relay = {
+        ok: false,
+        code: safeCode((error as { code?: unknown }).code),
+      };
+    }
+    return doctorResult(checks, requestId);
+  }
+
+  if (installation === null) {
+    try {
+      const credential = await context.loadClientCredential();
+      if (credential !== null) {
+        checks.installation = {
+          ok: false,
+          code: "INSTALLATION_INCONSISTENT",
+          value: "absent",
+        };
+        checks.localCredential = {
+          ok: false,
+          code: "INSTALLATION_INCONSISTENT",
+          value: "orphaned",
+        };
+        return doctorResult(checks, requestId);
+      }
+      checks.localCredential = { ok: true, value: "absent" };
+    } catch (error) {
+      checks.installation = {
+        ok: false,
+        code: "INSTALLATION_INCONSISTENT",
+        value: "absent",
+      };
+      checks.localCredential = {
+        ok: false,
+        code: safeCode((error as { code?: unknown }).code),
+      };
+      return doctorResult(checks, requestId);
+    }
   }
   try {
     const status = await context.getServiceManager().status();
@@ -229,15 +309,7 @@ async function runDoctor(context: CliContext): Promise<unknown> {
       code: safeCode((error as { code?: unknown }).code),
     };
   }
-  const ok = Object.values(checks).every((check) => check.ok);
-  return {
-    schemaVersion: 1,
-    ok,
-    command: "doctor",
-    ...(requestId === undefined ? {} : { requestId }),
-    ...(ok ? {} : { error: { code: "DOCTOR_CHECK_FAILED", retryable: false } }),
-    checks,
-  };
+  return doctorResult(checks, requestId);
 }
 
 function addDaemonDoctorCheck(
@@ -257,10 +329,18 @@ function addDaemonDoctorCheck(
   };
 }
 
-async function runReset(context: CliContext): Promise<unknown> {
+async function runReset(context: CliContext, local: boolean): Promise<unknown> {
   const confirmation = await context.confirmReset();
   if (confirmation?.trim() !== "RESET")
     failure("RESET_CONFIRMATION_REQUIRED", 2);
+  if (local) {
+    await context.resetLocal();
+    return {
+      ok: true,
+      command: "reset",
+      result: { state: "local_stopped" },
+    };
+  }
   await context.deprovisionRelay();
   const installation = await context.installation();
   if (installation?.role !== "client") {
@@ -285,18 +365,26 @@ export async function runCommand(
       );
     case "setup": {
       const optionsWithPair = options as unknown as SetupOptions;
+      const pairPrompt = options.pairPrompt === true;
       if (
         (optionsWithPair.pair !== undefined &&
           optionsWithPair.pairStdin === true) ||
+        (pairPrompt && optionsWithPair.pairStdin === true) ||
         (optionsWithPair.pairStdout === true &&
           (optionsWithPair.pair !== undefined ||
-            optionsWithPair.pairStdin === true))
+            optionsWithPair.pairStdin === true ||
+            pairPrompt))
       )
         failure("USAGE_ERROR", 2);
-      const pair =
-        optionsWithPair.pairStdin === true
-          ? (await context.readStdin()).trim()
-          : optionsWithPair.pair;
+      let pair = optionsWithPair.pair;
+      if (optionsWithPair.pairStdin === true)
+        pair = (await context.readStdin()).trim();
+      else if (pairPrompt) {
+        const prompted = (await context.promptPairingInvitation())?.trim();
+        if (prompted === undefined || prompted.length === 0)
+          failure("PAIRING_INVITATION_REQUIRED", 2);
+        pair = prompted;
+      }
       if (pair !== undefined) {
         try {
           parsePairingInvitation(pair);
@@ -329,7 +417,7 @@ export async function runCommand(
     case "doctor":
       return await runDoctor(context);
     case "reset":
-      return await runReset(context);
+      return await runReset(context, options.local === true);
     default:
       failure("USAGE_ERROR", 2);
   }
@@ -359,10 +447,15 @@ export function humanSuccess(
     };
     return (
       Object.entries(result.checks)
-        .map(
-          ([name, value]) =>
-            `${labels[name]?.[language] ?? name}: ${isRecord(value) && value.ok === true ? "ok" : "failed"}`,
-        )
+        .map(([name, value]) => {
+          if (isRecord(value) && value.ok === true)
+            return `${labels[name]?.[language] ?? name}: ok`;
+          const code =
+            isRecord(value) && typeof value.code === "string"
+              ? value.code
+              : "LOCAL_FAILURE";
+          return `${labels[name]?.[language] ?? name}: failed (${code}) — ${localizedMessage(code, language)}`;
+        })
         .join("\n") + "\n"
     );
   }

@@ -2,7 +2,7 @@ import {
   randomBytes as cryptoRandomBytes,
   randomUUID as cryptoRandomUUID,
 } from "node:crypto";
-import { chmod, open, rename, rm } from "node:fs/promises";
+import { chmod, lstat, open, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,11 @@ import * as QRCode from "qrcode";
 
 import { APP_VERSION } from "../app/version.js";
 import { runProductionDaemon } from "../daemon/production.js";
-import { resetOwnerData } from "../daemon/reset.js";
+import {
+  assertLocalClientResetAllowed,
+  resetLocalClientData,
+  resetOwnerData,
+} from "../daemon/reset.js";
 import { loadCapability, loadOrCreateCapability } from "../ipc/capability.js";
 import {
   IpcTransportError,
@@ -49,10 +53,12 @@ import { RemoteFileSender } from "../relay/uploads.js";
 import {
   SetupCoordinator,
   SetupCoordinatorError,
+  type PersistSetupClientPair,
 } from "../setup/coordinator.js";
 import { NativeCredentialStore } from "../storage/credential-store.js";
 import { selectRelayCredentialStore } from "../storage/client-relay-credential-store.js";
 import { JsonInstallationStore } from "../storage/installation-store.js";
+import type { ClientRelayCredential } from "../storage/relay-credential-store.js";
 import {
   type CliDependencies,
   type CliIO,
@@ -286,6 +292,27 @@ export class CliContext {
     }
   }
 
+  public async promptPairingInvitation(): Promise<string | null> {
+    if (this.dependencies.promptPairingInvitation !== undefined)
+      return await this.dependencies.promptPairingInvitation();
+    if (!this.stdinIsTTY()) return null;
+    await writeOutput(
+      this.io.stderr,
+      this.language === "zh-CN"
+        ? "粘贴配对邀请并按回车："
+        : "Paste the pairing invitation and press Enter: ",
+    );
+    const readline = createInterface({
+      input: this.io.stdin,
+      output: this.io.stderr,
+    });
+    try {
+      return await readline.question("");
+    } finally {
+      readline.close();
+    }
+  }
+
   public async confirmReset(): Promise<string | null> {
     if (this.dependencies.promptReset !== undefined)
       return await this.dependencies.promptReset();
@@ -339,8 +366,14 @@ export class CliContext {
 
     const paths = this.getPaths();
     const existingInstallation = await this.installation();
+    // A pairing request can only create a fresh client. Reject an already
+    // configured machine before selecting any client credential store; this
+    // keeps a Hub pairing attempt from probing a new local client backend.
+    if (options.pair !== undefined && existingInstallation !== null)
+      throw new SetupCoordinatorError("INSTALLATION_ALREADY_CONFIGURED");
     const clientFlow =
-      options.pair !== undefined || existingInstallation?.role === "client";
+      existingInstallation?.role === "client" ||
+      (options.pair !== undefined && existingInstallation === null);
     const provisioner = new CloudflareProvisioner({
       temporaryRoot: paths.tempDir,
       selectAccount: async (accounts) =>
@@ -377,13 +410,26 @@ export class CliContext {
         : this.getServiceManager(),
       ipc: async (payload, eventHandler, verifyCode) =>
         await this.setupIpc(payload, eventHandler, verifyCode),
-      pairDevice: async (invitation) => {
+      pairDevice: async (
+        invitation: string,
+        persist: PersistSetupClientPair,
+      ) => {
+        await writeOutput(
+          this.io.stderr,
+          this.language === "zh-CN"
+            ? "配对中：正在保存本机信息并连接个人 Relay…\n"
+            : "Pairing: saving local device data and connecting to the personal relay…\n",
+        );
         const pairing = new PairingClient();
         const attempt = pairing.begin(invitation);
-        const transport = new RelayHttpTransport();
+        await persist({
+          relayUrl: attempt.relayUrl,
+          credential: attempt.credential,
+        });
+        const transport = new RelayHttpTransport({ timeoutMs: 10_000 });
         let response: Awaited<ReturnType<typeof transport.exchange>> | null =
           null;
-        for (let retry = 0; retry < 8; retry += 1) {
+        for (let retry = 0; retry < 3; retry += 1) {
           try {
             response = await transport.exchange(
               attempt.relayUrl,
@@ -394,7 +440,13 @@ export class CliContext {
             const retryable =
               error instanceof RelayProtocolError &&
               (error.retryable || error.code === "HUB_OFFLINE");
-            if (!retryable || retry === 7) throw error;
+            if (!retryable || retry === 2) throw error;
+            await writeOutput(
+              this.io.stderr,
+              this.language === "zh-CN"
+                ? `Relay 暂不可达，正在重试（${retry + 2}/3）…\n`
+                : `The relay is temporarily unreachable; retrying (${retry + 2}/3)…\n`,
+            );
             await new Promise((resolve) =>
               setTimeout(resolve, Math.min(2_000, 250 * 2 ** retry)),
             );
@@ -471,12 +523,55 @@ export class CliContext {
     const paths = this.getPaths();
     const installation = await this.installation();
     await resetOwnerData(paths, {
-      credentialStore: new NativeCredentialStore(),
+      credentialStore:
+        installation?.role === "client"
+          ? { delete: () => Promise.resolve() }
+          : new NativeCredentialStore(),
       relayCredentialStore: selectRelayCredentialStore(
         paths,
         installation?.role === "client" ? "client" : "hub",
       ),
     });
+  }
+
+  public async resetLocal(): Promise<void> {
+    if (this.dependencies.resetLocal !== undefined) {
+      await this.dependencies.resetLocal(this.getPaths());
+      return;
+    }
+    const paths = this.getPaths();
+    // Perform the role and Hub-state guard before touching a possibly stale
+    // service. This makes `reset --local` a client-only recovery operation.
+    await assertLocalClientResetAllowed(paths);
+    let windowsCredentialStore:
+      ReturnType<typeof selectRelayCredentialStore> | undefined;
+    if (paths.platform === "win32") {
+      const credentialStore = selectRelayCredentialStore(paths, "client");
+      const credential = await credentialStore.load();
+      if (credential?.role === "hub")
+        throw new SetupCoordinatorError("RESET_LOCAL_HUB_STATE");
+      if (credential?.role === "client")
+        windowsCredentialStore = credentialStore;
+    }
+    if (await this.localServiceConfigExists(paths.serviceConfigPath)) {
+      await this.getServiceManager().uninstall();
+    }
+    // Windows keeps the client relay credential in its native relay store;
+    // clear that store explicitly while never constructing the Weixin
+    // NativeCredentialStore used by a Hub.
+    if (windowsCredentialStore !== undefined)
+      await windowsCredentialStore.delete();
+    await resetLocalClientData(paths);
+  }
+
+  public async loadClientCredential(): Promise<ClientRelayCredential | null> {
+    if (this.dependencies.loadClientCredential !== undefined)
+      return await this.dependencies.loadClientCredential();
+    const credential = await selectRelayCredentialStore(
+      this.getPaths(),
+      "client",
+    ).load();
+    return credential?.role === "client" ? credential : null;
   }
 
   public async deprovisionRelay(): Promise<void> {
@@ -603,6 +698,16 @@ export class CliContext {
     } catch (error) {
       await handle.close().catch(() => undefined);
       await rm(temporaryPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async localServiceConfigExists(path: string): Promise<boolean> {
+    try {
+      const metadata = await lstat(path);
+      return metadata.isFile() || metadata.isSymbolicLink();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw error;
     }
   }

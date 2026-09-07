@@ -103,11 +103,11 @@ async function ensureOwnerOnlyParent(
 }
 
 /**
- * Stores only a paired Linux client credential in an owner-only file.
+ * Stores only a paired POSIX client credential in an owner-only file.
  *
  * This store deliberately has no keyring dependency. A Hub continues to use
- * NativeRelayCredentialStore, while a Linux client can run in SSH/WSL/headless
- * environments that have no Secret Service session.
+ * NativeRelayCredentialStore, while a POSIX client can run in
+ * SSH/WSL/headless environments that have no usable native keyring session.
  */
 export class OwnerOnlyClientRelayCredentialStore {
   public constructor(private readonly filePath: string) {}
@@ -162,18 +162,18 @@ export class OwnerOnlyClientRelayCredentialStore {
     }
 
     const temporaryPath = `${this.filePath}.${randomUUID()}.tmp`;
-    const handle = await open(
-      temporaryPath,
-      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-      0o600,
-    );
     try {
-      await handle.writeFile(value, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    try {
+      const handle = await open(
+        temporaryPath,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+        0o600,
+      );
+      try {
+        await handle.writeFile(value, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
       await chmod(temporaryPath, 0o600);
       await rename(temporaryPath, this.filePath);
       await chmod(this.filePath, 0o600);
@@ -203,7 +203,10 @@ export function selectRelayCredentialStore(
   paths: PlatformPaths,
   role: "hub" | "client",
 ): NativeRelayCredentialStore | OwnerOnlyClientRelayCredentialStore {
-  if (paths.platform === "linux" && role === "client") {
+  if (
+    (paths.platform === "linux" || paths.platform === "darwin") &&
+    role === "client"
+  ) {
     return new OwnerOnlyClientRelayCredentialStore(paths.clientCredentialFile);
   }
   return new NativeRelayCredentialStore();

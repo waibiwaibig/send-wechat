@@ -15,6 +15,8 @@ import type {
 
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 const MAX_RELAY_FRAME_BYTES = 12 * 1024 * 1024;
+const DEFAULT_RELAY_TIMEOUT_MS = 35_000;
+const MAX_RELAY_TIMEOUT_MS = 2_147_483_647;
 const remoteCommandSchema = z.discriminatedUnion("command", [
   z.strictObject({ command: z.literal("status") }),
   z.strictObject({
@@ -104,15 +106,24 @@ export class RelayProtocolError extends Error {
 export class RelayHttpTransport implements RelayTransportPort {
   private readonly fetchImplementation: PlatformFetch;
   private readonly nextRequestId: () => string;
+  private readonly timeoutMs: number;
 
   public constructor(
     dependencies: {
       fetch?: PlatformFetch;
       requestId?: () => string;
+      timeoutMs?: number;
     } = {},
   ) {
     this.fetchImplementation = dependencies.fetch ?? fetchWithSystemProxy;
     this.nextRequestId = dependencies.requestId ?? randomUUID;
+    this.timeoutMs = dependencies.timeoutMs ?? DEFAULT_RELAY_TIMEOUT_MS;
+    if (
+      !Number.isSafeInteger(this.timeoutMs) ||
+      this.timeoutMs <= 0 ||
+      this.timeoutMs > MAX_RELAY_TIMEOUT_MS
+    )
+      throw new RelayProtocolError("RELAY_TIMEOUT_INVALID");
   }
 
   public async exchange(
@@ -134,7 +145,7 @@ export class RelayHttpTransport implements RelayTransportPort {
           "x-send-wechat-request-id": requestId,
         },
         body: new Uint8Array(frame),
-        signal: AbortSignal.timeout(35_000),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch {
       throw new RelayProtocolError("RELAY_UNAVAILABLE", true);
@@ -149,7 +160,13 @@ export class RelayHttpTransport implements RelayTransportPort {
       declaredLength > MAX_RELAY_FRAME_BYTES
     )
       throw new RelayProtocolError("RELAY_RESPONSE_INVALID");
-    const responseFrame = Buffer.from(await response.arrayBuffer());
+    let responseBody: ArrayBuffer;
+    try {
+      responseBody = await response.arrayBuffer();
+    } catch {
+      throw new RelayProtocolError("RELAY_UNAVAILABLE", true);
+    }
+    const responseFrame = Buffer.from(responseBody);
     if (
       responseFrame.byteLength === 0 ||
       responseFrame.byteLength > MAX_RELAY_FRAME_BYTES

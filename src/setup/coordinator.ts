@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import type { IpcClientPayload, IpcEvent } from "../ipc/transport.js";
 import type { InstallationState } from "../storage/installation-store.js";
 import type {
@@ -34,6 +36,13 @@ export type SetupResult = {
       };
 };
 
+export type SetupClientPair = {
+  relayUrl: string;
+  credential: ClientRelayCredential;
+};
+
+export type PersistSetupClientPair = (paired: SetupClientPair) => Promise<void>;
+
 export class SetupCoordinatorError extends Error {
   public constructor(public readonly code: string) {
     super(code);
@@ -69,10 +78,10 @@ export class SetupCoordinator {
         onEvent?: (event: IpcEvent) => Promise<void> | void,
         onVerifyCode?: () => Promise<string | null>,
       ) => Promise<unknown>;
-      readonly pairDevice: (invitation: string) => Promise<{
-        relayUrl: string;
-        credential: ClientRelayCredential;
-      }>;
+      readonly pairDevice: (
+        invitation: string,
+        persist: PersistSetupClientPair,
+      ) => Promise<SetupClientPair>;
       readonly randomBytes: (size: number) => Buffer;
       readonly sleep: (milliseconds: number) => Promise<void>;
     },
@@ -211,22 +220,65 @@ export class SetupCoordinator {
   }
 
   private async setupClient(invitation: string): Promise<SetupResult> {
-    const paired = await this.dependencies.pairDevice(invitation);
-    const installation: InstallationState = {
-      schemaVersion: 1,
-      role: "client",
-      relayUrl: paired.relayUrl,
-      deviceId: paired.credential.deviceId,
-    };
-    try {
-      await this.dependencies.credentialStore.save(paired.credential);
-      await this.dependencies.installationStore.save(installation);
-    } catch (error) {
-      await Promise.allSettled([
-        this.dependencies.credentialStore.delete(),
-        this.dependencies.installationStore.delete(),
+    let persistedPair: SetupClientPair | null = null;
+    let cleanupStarted = false;
+
+    const rollback = async (): Promise<void> => {
+      if (cleanupStarted) return;
+      cleanupStarted = true;
+      const results = await Promise.allSettled([
+        Promise.resolve().then(async () => {
+          await this.dependencies.credentialStore.delete();
+        }),
+        Promise.resolve().then(async () => {
+          await this.dependencies.installationStore.delete();
+        }),
       ]);
+      if (results.some((result) => result.status === "rejected"))
+        throw new SetupCoordinatorError("SETUP_CLIENT_CLEANUP_FAILED");
+    };
+
+    const persist = async (paired: SetupClientPair): Promise<void> => {
+      try {
+        const installation: InstallationState = {
+          schemaVersion: 1,
+          role: "client",
+          relayUrl: paired.relayUrl,
+          deviceId: paired.credential.deviceId,
+        };
+        await this.dependencies.credentialStore.save(paired.credential);
+        await this.dependencies.installationStore.save(installation);
+
+        const storedCredential = await this.dependencies.credentialStore.load();
+        const storedInstallation =
+          await this.dependencies.installationStore.load();
+        if (
+          !isDeepStrictEqual(storedCredential, paired.credential) ||
+          !isDeepStrictEqual(storedInstallation, installation)
+        )
+          throw new SetupCoordinatorError("SETUP_CLIENT_READBACK_MISMATCH");
+
+        persistedPair = structuredClone(paired);
+      } catch (error) {
+        await rollback();
+        throw normalizeClientStorageError(error);
+      }
+    };
+
+    let paired: SetupClientPair;
+    try {
+      paired = await this.dependencies.pairDevice(invitation, persist);
+    } catch (error) {
+      if (persistedPair !== null) await rollback();
       throw error;
+    }
+
+    if (persistedPair === null) {
+      throw new SetupCoordinatorError("SETUP_CLIENT_PERSISTENCE_MISSING");
+    }
+    if (!isDeepStrictEqual(paired, persistedPair)) {
+      await rollback();
+      throw new SetupCoordinatorError("SETUP_CLIENT_PAIR_MISMATCH");
     }
     return {
       ok: true,
@@ -244,6 +296,23 @@ export class SetupCoordinator {
     if (!status.installed) await this.dependencies.service.install();
     if (!status.running) await this.dependencies.service.start();
   }
+}
+
+function normalizeClientStorageError(error: unknown): unknown {
+  if (error instanceof SetupCoordinatorError) return error;
+  const code = errorCode(error);
+  if (
+    code === "RELAY_CREDENTIAL_PERMISSIONS_UNSAFE" ||
+    code === "INSTALLATION_PERMISSIONS_UNSAFE"
+  )
+    return error;
+  return new SetupCoordinatorError("SETUP_CLIENT_STORAGE_FAILED");
+}
+
+function errorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) return null;
+  const code = (error as Record<string, unknown>).code;
+  return typeof code === "string" ? code : null;
 }
 
 function extractState(value: unknown): string | null {

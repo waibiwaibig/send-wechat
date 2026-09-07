@@ -31,7 +31,7 @@ send-wechat setup
 `setup` 会产生真实外部状态，请由仓库所有者亲自完成以下动作：
 
 1. 浏览器打开 Cloudflare 设备授权页；确认授权的是预期 account。若有多个 account，确认
-   CLI 显示选择而不是静默选第一个。
+   CLI 显示选择并等待确认。
 2. 若账户尚无 `workers.dev` 子域，确认 Wrangler 在当前终端交互询问名称与最终确认，
    不应自动选择 `no` 或要求重新执行另一条部署命令。随后在 Cloudflare dashboard
    确认只新增一个随机名 `send-wechat-*` Worker，使用
@@ -59,8 +59,9 @@ send-wechat --json send --text 'send-wechat acceptance' --idempotency-key accept
 
 1. Hub 使用无 shell trace 的直接管道运行
    `send-wechat setup --pair-stdout | ssh TARGET 'send-wechat setup --pair-stdin'`。证据、
-   终端输出和命令行中不得出现邀请全文。
-2. 新设备/新系统用户从同一 tarball 安装，接收端执行
+   命令行和诊断记录中不得出现邀请全文。复制粘贴路径允许在用户选择的终端显示配对码。
+2. Hub 和每台客户端/WSL 环境从同一 tarball 安装 CLI，并为各自 Agent 安装全局 skill。
+   重开 Agent 会话验证技能发现，不发送消息。接收端执行
    `send-wechat setup --pair-stdin`；不应安装后台服务、创建 IPC capability、显示 QR、
    请求 Cloudflare OAuth，或把邀请写入 argv/history/log。
 3. 远端运行 `doctor`、`status`、文本发送和一个大于 512 KiB 的非敏感文件发送；Hub
@@ -70,12 +71,39 @@ send-wechat --json send --text 'send-wechat acceptance' --idempotency-key accept
    状态应自动恢复。
 6. 重启 Hub 操作系统，确认当前用户服务与 outbound Relay 连接自动恢复；远端无需改配置。
 
+## 发布阻断项：WSL Hub → macOS arm64 SSH 客户端
+
+**状态：本次修复的真实双机用例待执行，发布前必须记录结果。** 自动化中的假 Relay、
+模拟存储故障、macOS 本地文件测试均不能替代本项。使用独立 macOS 用户或测试机；不要
+把现用 Hub 当客户端重置。无需把新的安装覆盖到日常使用环境来完成单元测试。
+
+1. WSL Hub 保持已激活且在线；macOS 启用 Remote Login。记录两端 OS/CPU、Node 版本、
+   tarball 哈希和 CLI 版本。两端使用同一待发布构建，分别验证全局 skill 可发现。
+2. 在 WSL 先验证 `ssh USER@MAC 'send-wechat --version'`，再执行上述配对管道。
+   接收端处于非 GUI SSH 会话；应完成配对，无 Keychain 提示。正常可达网络下记录总耗时；
+   若超过 60 秒，记为失败并中断调查，不能把无限等待当作人工授权门槛。
+3. 使用新的测试用户，把本地客户端状态目录设置成不可写或不安全权限（仅操作测试目录），
+   再输入一份有效邀请。要求在 5 秒内报告本地存储/权限层失败，Hub 未新增设备，本机无有效
+   客户端安装。修复测试目录后，在十分钟有效期内使用同一份邀请应成功。
+4. 检查凭据目录/文件权限分别为 `0700`/`0600`，不读取或记录内容。运行 `doctor` 和
+   `status`，然后另行执行已授权的文本/文件测试，分别记录接口接受和人工收到。
+5. 再用独立客户端测试人工复制路径：Hub `setup --pair-stdout` → 客户端 `setup --pair` →
+   粘贴一整行并回车。应立即结束输入，无需 Ctrl-D；参数和诊断输出不含配对码。
+6. 在测试客户端构造缺失凭据/安装记录、残留服务配置，确认 `doctor` 报具体本地层；
+   `reset --local` 确认后可清理并重新配对，Cloudflare 部署与 Hub 保持正常。对已识别的 Hub
+   调用 `reset --local` 必须拒绝且不修改绑定。
+7. 单独记录进程崩溃、网络最终响应丢失的结果：本流程可留下待诊断状态，允许本地恢复后用
+   新邀请配对。它不承诺分布式崩溃原子性，不能把此项误记为存储故障重试已验证。
+
+验收记录至少包含：构建哈希、场景、是否 SSH/GUI、耗时、错误码、两端诊断结果、skill
+发现情况。只记录脱敏元数据；不要记录配对码、凭据和微信正文。
+
 ## 会话、reset 与失败边界
 
 1. 在真实窗口观察第 22 小时后的 `renewal_due`；不回复直到 24 小时后，发送应 fail
    closed。绑定用户再发一条入站消息后恢复 `ready`。
 2. 远端执行 `reset`：确认只清除该设备本机状态，不删除 Worker、不停止 Hub。该操作
-   不是 Hub 端撤销；已复制到别处的旧 device key 仍需通过 Hub 整体 reset 才失效。
+   不撤销 Hub 端授权；已复制到别处的旧 device key 仍需通过 Hub 整体 reset 才失效。
 3. Hub 执行 `reset` 前先测试取消，取消不得改变状态。正式输入 `RESET` 后确认 Worker
    和 Durable Object 从记录的 Cloudflare account 删除，服务停止，本机绑定/状态清除。
 4. 如 Cloudflare 删除人为失败（例如断网），确认 reset 返回失败且保留 Hub 本地管理状态；

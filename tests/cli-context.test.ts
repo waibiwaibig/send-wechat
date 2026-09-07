@@ -1,10 +1,33 @@
-import { Readable, Writable } from "node:stream";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PassThrough, Readable, Writable } from "node:stream";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CliContext, createContext } from "../src/cli/context.js";
 import type { CliIO } from "../src/cli/contracts.js";
+import { RelayCipher } from "../src/relay/crypto.js";
+import {
+  PairingInvitations,
+  parsePairingInvitation,
+} from "../src/relay/invitation.js";
+import { RelayHttpTransport } from "../src/relay/protocol.js";
+import { NativeRelayCredentialStore } from "../src/storage/relay-credential-store.js";
+import { NativeCredentialStore } from "../src/storage/credential-store.js";
+import { JsonInstallationStore } from "../src/storage/installation-store.js";
 import type { PlatformPaths } from "../src/platform/paths.js";
+
+const temporaryRoots: string[] = [];
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(
+    temporaryRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true })),
+  );
+});
 
 const fixturePaths: PlatformPaths = {
   platform: "darwin",
@@ -212,4 +235,193 @@ describe("CLI context adapters", () => {
     await context.renderQr("https://example.com/weixin-login", undefined);
     expect(output.stderr()).toContain("\u001b[");
   });
+
+  it("accepts one pasted line without waiting for terminal EOF", async () => {
+    const input = Object.assign(new PassThrough(), { isTTY: true });
+    const output = io(input);
+    const context = new CliContext({ io: output.value, paths: fixturePaths });
+    const result = context.promptPairingInvitation();
+    setImmediate(() => input.write("sw1.test-code\n"));
+    await expect(result).resolves.toBe("sw1.test-code");
+    expect(input.readableEnded).toBe(false);
+    input.destroy();
+  });
+
+  it("resets a headless Linux client without constructing a service or native keyring", async () => {
+    const paths = await isolatedPaths("linux");
+    await mkdir(paths.stateDir, { mode: 0o700 });
+    await writeFile(paths.clientCredentialFile, "test-client", { mode: 0o600 });
+    const service = vi.fn(() => {
+      throw new Error("headless client has no service manager");
+    });
+    const native = vi.spyOn(NativeRelayCredentialStore.prototype, "load");
+    const context = new CliContext({ paths, createServiceManager: service });
+    await context.resetLocal();
+    expect(service).not.toHaveBeenCalled();
+    expect(native).not.toHaveBeenCalled();
+    await expect(readFile(paths.clientCredentialFile)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("clears Windows client relay credentials without deleting Weixin credentials", async () => {
+    const paths = await isolatedPaths("win32");
+    const client = {
+      schemaVersion: 1 as const,
+      role: "client" as const,
+      deviceId: Buffer.alloc(16, 1).toString("base64url"),
+      deviceKey: Buffer.alloc(32, 2).toString("base64url"),
+    };
+    await new JsonInstallationStore(paths.installationFile).save({
+      schemaVersion: 1,
+      role: "client",
+      relayUrl: "https://alice.workers.dev",
+      deviceId: client.deviceId,
+    });
+    vi.spyOn(NativeRelayCredentialStore.prototype, "load").mockResolvedValue(
+      client,
+    );
+    const remove = vi
+      .spyOn(NativeRelayCredentialStore.prototype, "delete")
+      .mockResolvedValue();
+    const weixin = vi.spyOn(NativeCredentialStore.prototype, "delete");
+    await new CliContext({ paths }).resetLocal();
+    expect(remove).toHaveBeenCalledOnce();
+    expect(weixin).not.toHaveBeenCalled();
+    expect(
+      await new JsonInstallationStore(paths.installationFile).load(),
+    ).toBeNull();
+  });
+
+  it("rejects orphaned Windows Hub credentials before touching a service", async () => {
+    const paths = await isolatedPaths("win32");
+    await writeFile(paths.serviceConfigPath, "stale-config");
+    vi.spyOn(NativeRelayCredentialStore.prototype, "load").mockResolvedValue({
+      schemaVersion: 1,
+      role: "hub",
+      hubAuthToken: Buffer.alloc(32, 1).toString("base64url"),
+      devices: [],
+    });
+    const remove = vi.spyOn(NativeRelayCredentialStore.prototype, "delete");
+    const service = vi.fn(() => {
+      throw new Error("must preserve Hub service");
+    });
+    await expect(
+      new CliContext({ paths, createServiceManager: service }).resetLocal(),
+    ).rejects.toMatchObject({ code: "RESET_LOCAL_HUB_STATE" });
+    expect(remove).not.toHaveBeenCalled();
+    expect(service).not.toHaveBeenCalled();
+    expect(await readFile(paths.serviceConfigPath, "utf8")).toBe(
+      "stale-config",
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not contact the relay when actual local persistence fails",
+    async () => {
+      const paths = await isolatedPaths();
+      const invitation = new PairingInvitations().issue(
+        "https://alice.workers.dev",
+      );
+      vi.spyOn(JsonInstallationStore.prototype, "save").mockRejectedValueOnce(
+        Object.assign(new Error("disk full"), { code: "ENOSPC" }),
+      );
+      const exchange = vi
+        .spyOn(RelayHttpTransport.prototype, "exchange")
+        .mockRejectedValue(new Error("must not contact relay"));
+      await expect(
+        new CliContext({ io: io().value, paths }).setup({ pair: invitation }),
+      ).rejects.toMatchObject({ code: "SETUP_CLIENT_STORAGE_FAILED" });
+      expect(exchange).not.toHaveBeenCalled();
+      expect(
+        await new JsonInstallationStore(paths.installationFile).load(),
+      ).toBeNull();
+      await expect(readFile(paths.clientCredentialFile)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "persists a client pair before the production relay exchange",
+    async () => {
+      const paths = await isolatedPaths();
+      const invitation = new PairingInvitations().issue(
+        "https://alice.workers.dev",
+      );
+      const parsed = parsePairingInvitation(invitation);
+      const cipher = new RelayCipher();
+      let exchangeSawPersisted = false;
+      vi.spyOn(RelayHttpTransport.prototype, "exchange").mockImplementation(
+        async (_relayUrl, requestFrame) => {
+          const key = Buffer.from(parsed.secret, "base64url");
+          const request = cipher.open({
+            frame: requestFrame,
+            expectedKind: "pair",
+            expectedCredentialId: parsed.invitationId,
+            key,
+          });
+          const body = JSON.parse(request.toString("utf8")) as {
+            deviceId: string;
+          };
+          const responseFrame = cipher.seal({
+            kind: "pair",
+            credentialId: parsed.invitationId,
+            key,
+            plaintext: Buffer.from(
+              JSON.stringify({
+                v: 1,
+                type: "pair_accepted",
+                deviceId: body.deviceId,
+              }),
+              "utf8",
+            ),
+          });
+          const installation = await new JsonInstallationStore(
+            paths.installationFile,
+          ).load();
+          const credential = JSON.parse(
+            await readFile(paths.clientCredentialFile, "utf8"),
+          ) as { role: string };
+          expect(installation?.role).toBe("client");
+          expect(credential.role).toBe("client");
+          exchangeSawPersisted = true;
+          return { requestId: "pair-request", frame: responseFrame };
+        },
+      );
+
+      const context = new CliContext({
+        io: io().value,
+        paths,
+        currentSupportedPlatform: () => "darwin",
+      });
+      await expect(context.setup({ pair: invitation })).resolves.toMatchObject({
+        result: { role: "client", state: "paired" },
+      });
+      expect(exchangeSawPersisted).toBe(true);
+    },
+  );
 });
+
+async function isolatedPaths(
+  platform: PlatformPaths["platform"] = "darwin",
+): Promise<PlatformPaths> {
+  const root = await mkdtemp(join(tmpdir(), "send-wechat-context-pair-"));
+  temporaryRoots.push(root);
+  return {
+    ...fixturePaths,
+    platform,
+    stateDir: join(root, "state"),
+    logDir: join(root, "logs"),
+    runDir: join(root, "run"),
+    socketPath: join(root, "run", "send-wechat.sock"),
+    ipcEndpoint: join(root, "run", "send-wechat.sock"),
+    stateFile: join(root, "state", "state.json"),
+    installationFile: join(root, "state", "installation.json"),
+    idempotencyFile: join(root, "state", "idempotency.sqlite3"),
+    capabilityFile: join(root, "state", "capability"),
+    clientCredentialFile: join(root, "state", "client-credential.json"),
+    tempDir: join(root, "state", "tmp"),
+    serviceConfigPath: join(root, "service.plist"),
+  };
+}

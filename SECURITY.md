@@ -40,12 +40,13 @@ Weixin 凭据路径的信任边界。远端设备与 Hub 间的应用层密文�
 
 ## 本机凭据与 IPC
 
-- Hub 的 Weixin binding 和个人 Relay 使用系统原生凭据库中的固定独立条目。macOS 与
-  Windows 远端客户端也使用原生凭据库。
-- GNU/Linux 远端客户端只在 owner-only 文件中保存自己的 device ID/key；父目录必须是
+- Hub 的 Weixin binding 和个人 Relay 使用系统原生凭据库中的固定独立条目。
+  Windows 远端客户端使用原生凭据库。
+- macOS 与 GNU/Linux 远端客户端只在 owner-only 文件中保存自己的 device ID/key；父目录必须是
   `0700`，文件必须是 `0600`。读取时拒绝符号链接、非当前 owner、过宽权限、超限内容、
   未知 schema 和 Hub 凭据。该选择由平台与角色固定，不读取另一个存储作为 fallback。
-- 凭据不来自环境变量；日志、argv、聊天、截图和 shell history 不得包含邀请或凭据。
+- 凭据不来自环境变量；长期凭据不进入日志、argv、聊天、截图或 shell history。配对码可由
+  用户经自己的私聊传递，再粘贴到终端提示中；不写入命令参数、诊断日志或报告。
 - 非秘密状态采用 owner-only、严格 schema、原子替换的 JSON；Hub 幂等账本是固定 schema
   SQLite。未知版本不迁移、不 fallback。
 - Hub IPC 使用 owner-scoped Unix socket（macOS/Linux）或用户专属 Windows named pipe，
@@ -58,7 +59,13 @@ Weixin QR/验证码/首条激活消息、系统安全存储解锁、多设备决
 
 binding 与本机角色不可变。Hub `reset` 先确认删除记录的 Cloudflare Worker；失败则保留
 本地 Relay 管理状态。成功后才停止服务并删除两类钥匙串凭据、状态、日志和临时文件。
-远端 `reset` 只删除该设备的本机数据。
+远端 `reset` 只删除该设备的本机数据。`reset --local` 用于客户端恢复并清理残留服务，
+拒绝已识别的 Hub，不删除云端部署。macOS/Linux 不访问原生钥匙串，Windows 会清除
+自己的原生客户端凭据。它不撤销 Hub 上的旧设备授权。
+
+客户端先持久化并读回本机凭据与安装记录，再发送配对请求；本地存储失败不会消耗邀请。
+普通失败会清理本地记录；清理失败会单独报错。进程突然退出或 Hub 已接受后的网络中断
+仍可能需要本地恢复和重新配对，当前流程不承诺跨设备崩溃原子性。
 
 ## 发送语义
 

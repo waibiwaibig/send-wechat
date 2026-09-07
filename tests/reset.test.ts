@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { resetOwnerData } from "../src/daemon/reset.js";
+import { resetLocalClientData, resetOwnerData } from "../src/daemon/reset.js";
 import type { PlatformPaths } from "../src/platform/paths.js";
 
 const roots: string[] = [];
@@ -44,6 +44,66 @@ function paths(root: string): PlatformPaths {
 }
 
 describe("owner reset", () => {
+  it("clears only client records and a stale local capability", async () => {
+    const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-local-"));
+    roots.push(root);
+    const fixture = paths(root);
+    await mkdir(fixture.stateDir, { recursive: true, mode: 0o700 });
+    await writeFile(
+      fixture.installationFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "client",
+        relayUrl: "https://relay.workers.dev",
+        deviceId: Buffer.alloc(16, 1).toString("base64url"),
+      }),
+      { mode: 0o600 },
+    );
+    await writeFile(fixture.clientCredentialFile, "client", { mode: 0o600 });
+    await writeFile(fixture.capabilityFile, "stale", { mode: 0o600 });
+    const unrelated = join(fixture.stateDir, "keep-me");
+    await writeFile(unrelated, "keep");
+
+    await resetLocalClientData(fixture);
+
+    await expect(lstat(fixture.installationFile)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(lstat(fixture.clientCredentialFile)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(lstat(fixture.capabilityFile)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(unrelated, "utf8")).resolves.toBe("keep");
+  });
+
+  it("refuses local reset when Hub state is present and preserves client files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-local-hub-"));
+    roots.push(root);
+    const fixture = paths(root);
+    await mkdir(fixture.stateDir, { recursive: true, mode: 0o700 });
+    await writeFile(
+      fixture.installationFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        role: "hub",
+        relayUrl: "https://relay.workers.dev",
+        workerName: "send-wechat-hub",
+        accountId: "account",
+      }),
+      { mode: 0o600 },
+    );
+    await writeFile(fixture.clientCredentialFile, "keep", { mode: 0o600 });
+
+    await expect(resetLocalClientData(fixture)).rejects.toMatchObject({
+      code: "RESET_LOCAL_HUB_STATE",
+    });
+    await expect(readFile(fixture.clientCredentialFile, "utf8")).resolves.toBe(
+      "keep",
+    );
+  });
+
   it("deletes binding and data without following symlinks", async () => {
     const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-"));
     roots.push(root);

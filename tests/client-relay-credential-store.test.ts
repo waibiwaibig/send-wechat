@@ -48,7 +48,7 @@ async function fixturePath(): Promise<string> {
   return join(root, "state", "client-credential.json");
 }
 
-describe("owner-only Linux client relay credential store", () => {
+describe("owner-only POSIX client relay credential store", () => {
   it.skipIf(process.platform === "win32")(
     "round-trips a client credential with owner-only parent and file modes",
     async () => {
@@ -163,7 +163,7 @@ describe("owner-only Linux client relay credential store", () => {
     },
   );
 
-  it("selects the file store only for Linux clients and native storage everywhere else", () => {
+  it("selects the file store for POSIX clients and native storage for Hub/Windows", () => {
     const paths = (platform: PlatformPaths["platform"]): PlatformPaths => ({
       platform,
       arch: "x64",
@@ -193,6 +193,9 @@ describe("owner-only Linux client relay credential store", () => {
     ).toBe("NativeRelayCredentialStore");
     expect(
       selectRelayCredentialStore(paths("darwin"), "client").constructor.name,
+    ).toBe("OwnerOnlyClientRelayCredentialStore");
+    expect(
+      selectRelayCredentialStore(paths("win32"), "client").constructor.name,
     ).toBe("NativeRelayCredentialStore");
   });
 });
