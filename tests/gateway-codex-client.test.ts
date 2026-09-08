@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   CodexAppServer,
+  type CodexModel,
   type CodexEvent,
+  type GatewayPermission,
+  type ModelSelection,
 } from "../src/gateway/codex-client.js";
 
 const fixture = fileURLToPath(
@@ -12,12 +15,22 @@ const fixture = fileURLToPath(
 );
 const clients: CodexAppServer[] = [];
 
-function makeClient(mode = "normal", requestTimeoutMs = 1_000): CodexAppServer {
+function makeClient(
+  mode = "normal",
+  requestTimeoutMs = 1_000,
+  permission?: GatewayPermission,
+): CodexAppServer {
   const client = new CodexAppServer({
     executable: process.execPath,
     cwd: process.cwd(),
     args: [fixture],
-    env: { ...process.env, FAKE_CODEX_MODE: mode },
+    env: {
+      ...process.env,
+      FAKE_CODEX_MODE: mode,
+      ...(permission === undefined
+        ? {}
+        : { FAKE_CODEX_PERMISSION: permission }),
+    },
     requestTimeoutMs,
   });
   clients.push(client);
@@ -33,7 +46,146 @@ describe("Codex app-server stdio gateway", () => {
     const client = makeClient();
     await expect(client.connect()).resolves.toBeUndefined();
     await expect(client.createThread()).resolves.toBe("thread-1");
-    await expect(client.resumeThread("thread-1")).resolves.toBeUndefined();
+    await expect(client.resumeThread("thread-1")).resolves.toEqual({
+      model: "fake-model",
+      effort: "medium",
+    });
+  });
+
+  it("lists every model page and maps the protocol catalog", async () => {
+    const client = makeClient("model-pages");
+    await client.connect();
+
+    await expect(client.listModels()).resolves.toEqual([
+      {
+        model: "fake-model",
+        displayName: "Fake Model",
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        defaultReasoningEffort: "medium",
+        isDefault: true,
+      },
+      {
+        model: "fake-model-2",
+        displayName: "Fake Model Two",
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        defaultReasoningEffort: "high",
+        isDefault: false,
+      },
+    ] satisfies CodexModel[]);
+  });
+
+  it.each([
+    ["normal", { model: "fake-model", effort: "medium" }],
+    ["config-values", { model: "configured-model", effort: "high" }],
+    ["config-model", { model: "fake-model-2", effort: null }],
+    ["config-effort", { model: "fake-model", effort: "low" }],
+  ] as const)(
+    "resolves the default selection from config and the model catalog (%s)",
+    async (mode, expected) => {
+      const client = makeClient(mode);
+      await client.connect();
+      await expect(client.getDefaultSelection()).resolves.toEqual(expected);
+    },
+  );
+
+  it("uses the required config/read request shape", async () => {
+    const client = makeClient("config-payload");
+    await client.connect();
+    await expect(client.getDefaultSelection()).resolves.toEqual({
+      model: "fake-model",
+      effort: "medium",
+    });
+  });
+
+  it.each([
+    ["model-invalid-data", "invalid data"],
+    ["model-invalid-cursor", "invalid nextCursor"],
+    ["model-repeat", "repeated a pagination cursor"],
+    ["model-many", "exceeded the pagination limit"],
+    ["model-error", "model/list (400): model list failed"],
+    ["config-invalid", "Expected string or null field model"],
+    ["config-error", "config/read (400): config read failed"],
+  ] as const)(
+    "reports malformed model/config protocol data (%s)",
+    async (mode, message) => {
+      const client = makeClient(mode);
+      await client.connect();
+      const operation = mode.startsWith("config")
+        ? client.getDefaultSelection()
+        : client.listModels();
+      await expect(operation).rejects.toThrow(message);
+    },
+  );
+
+  it("forwards an explicit model and effort to thread/start", async () => {
+    const client = makeClient("validate-selection");
+    await client.connect();
+    const selection: ModelSelection = {
+      model: "selected-model",
+      effort: "high",
+    };
+    await expect(client.createThread(selection)).resolves.toBe("thread-1");
+  });
+
+  it("omits the thread config override when effort is unset", async () => {
+    const client = makeClient("validate-null-selection");
+    await client.connect();
+    await expect(
+      client.createThread({ model: "selected-model", effort: null }),
+    ).resolves.toBe("thread-1");
+  });
+
+  it("forwards an explicit model and effort to turn/start", async () => {
+    const client = makeClient("validate-turn-selection");
+    await client.connect();
+    const selection: ModelSelection = {
+      model: "selected-model",
+      effort: "high",
+    };
+    await expect(
+      client.startTurn("thread-1", "hello", selection),
+    ).resolves.toBe("turn-1");
+  });
+
+  it.each(["full", "workspace", "read-only"] as const)(
+    "maps the %s gateway permission to both protocol sandbox shapes",
+    async (permission) => {
+      const client = makeClient("validate-permission", 1_000, permission);
+      await client.connect();
+      const threadId = await client.createThread(undefined, permission);
+      await expect(
+        client.startTurn(threadId, "hello", undefined, permission),
+      ).resolves.toBe("turn-1");
+    },
+  );
+
+  it("injects the connection skill once for a newly created thread", async () => {
+    const client = makeClient("validate-bootstrap");
+    await client.connect();
+    const threadId = await client.createThread();
+    await expect(client.startTurn(threadId, "hello")).resolves.toBe("turn-1");
+    await expect(client.startTurn(threadId, "hello")).resolves.toBe("turn-2");
+  });
+
+  it("does not inject the skill after resuming a thread", async () => {
+    const client = makeClient("validate-bootstrap");
+    await client.connect();
+    const threadId = await client.createThread();
+    await expect(client.resumeThread(threadId)).resolves.toEqual({
+      model: "fake-model",
+      effort: "medium",
+    });
+    await expect(client.startTurn(threadId, "hello")).resolves.toBe("turn-1");
+  });
+
+  it("consumes the bootstrap skill before a failed dispatch", async () => {
+    const client = makeClient("bootstrap-error");
+    await client.connect();
+    const threadId = await client.createThread();
+    await expect(client.startTurn(threadId, "hello")).rejects.toThrow(
+      "bootstrap turn failed",
+    );
+    await expect(client.startTurn(threadId, "hello")).resolves.toBe("turn-1");
   });
 
   it("maps only agent message and turn notifications, preserving arrival order", async () => {
@@ -143,6 +295,17 @@ describe("Codex app-server stdio gateway", () => {
     client.onEvent((event) => events.push(event));
 
     await expect(client.connect()).rejects.toThrow("disconnected");
+    expect(events).toEqual([{ type: "disconnected" }]);
+  });
+
+  it("fails closed when skill registration is rejected during connect", async () => {
+    const client = makeClient("registration-error");
+    const events: CodexEvent[] = [];
+    client.onEvent((event) => events.push(event));
+
+    await expect(client.connect()).rejects.toThrow(
+      "skills/extraRoots/set (400): skill registration failed",
+    );
     expect(events).toEqual([{ type: "disconnected" }]);
   });
 

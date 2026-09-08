@@ -97,8 +97,12 @@ send-wechat-gateway setup --cwd /absolute/chosen/directory
 send-wechat-gateway --json status
 ```
 
-之后直接给绑定的 bot 发文字即可。新消息会打断当前回复；发送 `/newchat` 切换到空白
-聊天上下文。关闭 gateway 不影响普通的 `send-wechat send` 文本和文件发送。
+之后直接给绑定的 bot 发文字即可。每个新会话首轮会加载极短的微信连接 skill。
+发送 `/` 查看命令，`/model astra low` 选择模型和推理强度。秘书默认完全访问；
+发送 `/permission` 查看模式，用 `/permission workspace` 或 `/permission read-only`
+限制后续执行。`/stream off` 关闭逐段发送，`/stream on` 开启，下一次回复生效。
+新消息会打断当前回复；`/newchat` 切换到空白聊天上下文，同时提醒
+保留的模型、权限与流式状态。关闭 gateway 不影响普通的 `send-wechat send` 文本和文件发送。
 安装新版包后先重启 Hub 服务，使它加载入站接口。配置、服务控制和验收边界见
 [gateway 使用说明](docs/gateway.md)。
 

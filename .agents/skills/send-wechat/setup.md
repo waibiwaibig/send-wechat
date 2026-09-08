@@ -89,7 +89,7 @@ Explain the choice briefly, for example:
 
 > 基础微信发送已配置好。要不要顺便启用微信秘书？启用后，你给 bot 发文字就能与
 > 一个固定的 Codex 会话对话，回答会逐段回到微信；它会在 Hub 上常驻运行，使用
-> 你的 Codex 配置与账户。只用发送功能也可以。
+> 你的 Codex 账户，默认完全访问，可用 /permission 切换权限。只用发送功能也可以。
 
 Wait for the answer before installing Codex or starting the gateway. A decline
 completes onboarding; silence leaves this optional step unconfigured and does

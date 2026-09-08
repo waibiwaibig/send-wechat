@@ -1,6 +1,22 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { APP_VERSION } from "../app/version.js";
+
+export type ModelSelection = {
+  model: string;
+  effort: string | null;
+};
+
+export type CodexModel = {
+  model: string;
+  displayName: string;
+  supportedReasoningEfforts: string[];
+  defaultReasoningEffort: string;
+  isDefault: boolean;
+};
+
+export type GatewayPermission = "full" | "workspace" | "read-only";
 
 export type CodexEvent =
   | {
@@ -28,9 +44,19 @@ export type CodexEvent =
 
 export interface CodexPort {
   connect(): Promise<void>;
-  createThread(): Promise<string>;
-  resumeThread(threadId: string): Promise<void>;
-  startTurn(threadId: string, text: string): Promise<string>;
+  listModels(): Promise<CodexModel[]>;
+  getDefaultSelection(): Promise<ModelSelection>;
+  createThread(
+    selection?: ModelSelection,
+    permission?: GatewayPermission,
+  ): Promise<string>;
+  resumeThread(threadId: string): Promise<ModelSelection>;
+  startTurn(
+    threadId: string,
+    text: string,
+    selection?: ModelSelection,
+    permission?: GatewayPermission,
+  ): Promise<string>;
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   onEvent(listener: (event: CodexEvent) => void): () => void;
   close(): Promise<void>;
@@ -57,6 +83,8 @@ type PendingRequest = {
 const DEFAULT_ARGS = ["app-server", "--stdio"];
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_STDOUT_FRAME_BYTES = 1_048_576;
+const MAX_MODEL_LIST_PAGES = 64;
+const MODEL_LIST_PAGE_LIMIT = 100;
 const DISCONNECTED_ERROR = "Codex app-server disconnected";
 const METHOD_NOT_FOUND = -32601;
 const SERVER_REQUEST_ERROR = -32000;
@@ -81,6 +109,13 @@ const KNOWN_UNFULFILLABLE_METHODS = new Set([
   "attestation/generate",
 ]);
 
+const WECHAT_CONNECTION_SKILL_PATH = fileURLToPath(
+  new URL("../../.agents/skills/wechat-connection/SKILL.md", import.meta.url),
+);
+const WECHAT_CONNECTION_SKILL_ROOT = fileURLToPath(
+  new URL("../../.agents/skills", import.meta.url),
+);
+
 export class CodexAppServer implements CodexPort {
   private readonly executable: string;
   private readonly cwd: string;
@@ -95,6 +130,7 @@ export class CodexAppServer implements CodexPort {
   private nextRequestId = 1;
   private readonly pending = new Map<JsonRpcId, PendingRequest>();
   private readonly listeners = new Set<(event: CodexEvent) => void>();
+  private readonly newlyCreatedThreadIds = new Set<string>();
   private stdoutBuffer = "";
   private disconnectedNotified = false;
 
@@ -125,24 +161,106 @@ export class CodexAppServer implements CodexPort {
     return promise;
   }
 
-  async createThread(): Promise<string> {
-    const result = await this.request("thread/start", { cwd: this.cwd });
+  async listModels(): Promise<CodexModel[]> {
+    const models: CodexModel[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    for (let page = 0; page < MAX_MODEL_LIST_PAGES; page += 1) {
+      const params =
+        cursor === undefined
+          ? { limit: MODEL_LIST_PAGE_LIMIT }
+          : { cursor, limit: MODEL_LIST_PAGE_LIMIT };
+      const result = await this.request("model/list", params);
+      const modelPage = parseModelListResponse(result);
+      models.push(...modelPage.models);
+      if (modelPage.nextCursor === null) return models;
+      if (seenCursors.has(modelPage.nextCursor)) {
+        throw new Error(
+          "Codex model/list response repeated a pagination cursor",
+        );
+      }
+      seenCursors.add(modelPage.nextCursor);
+      cursor = modelPage.nextCursor;
+    }
+
+    throw new Error("Codex model/list exceeded the pagination limit");
+  }
+
+  async getDefaultSelection(): Promise<ModelSelection> {
+    const result = await this.request("config/read", {
+      cwd: this.cwd,
+      includeLayers: false,
+    });
+    const config = getObject(result, "config");
+    const configuredModel = getNullableString(config, "model");
+    const configuredEffort = getNullableString(
+      config,
+      "model_reasoning_effort",
+    );
+    if (configuredModel !== null) {
+      return { model: configuredModel, effort: configuredEffort };
+    }
+
+    const models = await this.listModels();
+    const selectedModel = models.find((model) => model.isDefault);
+    if (!selectedModel) {
+      throw new Error("Codex model/list response has no default model");
+    }
+    return {
+      model: selectedModel.model,
+      effort: configuredEffort ?? selectedModel.defaultReasoningEffort,
+    };
+  }
+
+  async createThread(
+    selection?: ModelSelection,
+    permission?: GatewayPermission,
+  ): Promise<string> {
+    const params: JsonObject = { cwd: this.cwd };
+    addSelectionToThreadStart(params, selection);
+    addPermissionToThreadStart(params, permission);
+    const result = await this.request("thread/start", params);
     const thread = getObject(result, "thread");
     const threadId = getString(thread, "id");
     if (!threadId)
       throw new Error("Codex thread/start response has no thread id");
+    this.newlyCreatedThreadIds.add(threadId);
     return threadId;
   }
 
-  async resumeThread(threadId: string): Promise<void> {
-    await this.request("thread/resume", { threadId });
+  async resumeThread(threadId: string): Promise<ModelSelection> {
+    const result = await this.request("thread/resume", { threadId });
+    const selection = parseThreadSelection(result, "thread/resume");
+    this.newlyCreatedThreadIds.delete(threadId);
+    return selection;
   }
 
-  async startTurn(threadId: string, text: string): Promise<string> {
-    const result = await this.request("turn/start", {
+  async startTurn(
+    threadId: string,
+    text: string,
+    selection?: ModelSelection,
+    permission?: GatewayPermission,
+  ): Promise<string> {
+    const input: JsonObject[] = [];
+    const needsBootstrapSkill = this.newlyCreatedThreadIds.has(threadId);
+    if (needsBootstrapSkill) {
+      input.push({
+        type: "skill",
+        name: "wechat-connection",
+        path: WECHAT_CONNECTION_SKILL_PATH,
+      });
+    }
+    input.push({ type: "text", text });
+
+    const params: JsonObject = {
       threadId,
-      input: [{ type: "text", text }],
-    });
+      input,
+    };
+    addSelectionToTurnStart(params, selection);
+    addPermissionToTurnStart(params, permission, this.cwd);
+    if (needsBootstrapSkill) this.newlyCreatedThreadIds.delete(threadId);
+    const result = await this.request("turn/start", params);
     const turn = getObject(result, "turn");
     const turnId = getString(turn, "id");
     if (!turnId) throw new Error("Codex turn/start response has no turn id");
@@ -256,8 +374,15 @@ export class CodexAppServer implements CodexPort {
           title: "send-wechat Codex gateway",
           version: APP_VERSION,
         },
+        capabilities: {
+          experimentalApi: true,
+          requestAttestation: false,
+        },
       });
       this.sendNotification("initialized");
+      await this.request("skills/extraRoots/set", {
+        extraRoots: [WECHAT_CONNECTION_SKILL_ROOT],
+      });
       this.state = "connected";
     } catch (error) {
       this.failClosed(asError(error));
@@ -547,6 +672,161 @@ function getObject(value: unknown, key: string): JsonObject {
 function getString(value: unknown, key: string): string | undefined {
   if (!isObject(value) || typeof value[key] !== "string") return undefined;
   return value[key];
+}
+
+function getNullableString(value: unknown, key: string): string | null {
+  if (!isObject(value)) throw new Error(`Expected object field ${key}`);
+  const field = value[key];
+  if (field === null || field === undefined) return null;
+  if (typeof field !== "string") {
+    throw new Error(`Expected string or null field ${key}`);
+  }
+  return field;
+}
+
+function getRequiredString(value: unknown, key: string): string {
+  const result = getString(value, key);
+  if (result === undefined || result.length === 0) {
+    throw new Error(`Expected string field ${key}`);
+  }
+  return result;
+}
+
+function parseModelListResponse(value: unknown): {
+  models: CodexModel[];
+  nextCursor: string | null;
+} {
+  if (!isObject(value) || !Array.isArray(value.data)) {
+    throw new Error("Codex model/list response has invalid data");
+  }
+  const rawCursor = value.nextCursor;
+  if (rawCursor !== null && typeof rawCursor !== "string") {
+    throw new Error("Codex model/list response has invalid nextCursor");
+  }
+  if (typeof rawCursor === "string" && rawCursor.length === 0) {
+    throw new Error("Codex model/list response has an empty nextCursor");
+  }
+  return {
+    models: value.data.map((model, index) => parseModel(model, index)),
+    nextCursor: rawCursor,
+  };
+}
+
+function parseModel(value: unknown, index: number): CodexModel {
+  if (!isObject(value)) {
+    throw new Error(
+      `Codex model/list response has invalid model at index ${index}`,
+    );
+  }
+  const supportedReasoningEfforts = value.supportedReasoningEfforts;
+  if (!Array.isArray(supportedReasoningEfforts)) {
+    throw new Error(
+      `Codex model/list response has invalid supportedReasoningEfforts at index ${index}`,
+    );
+  }
+  const efforts = supportedReasoningEfforts.map((effort, effortIndex) => {
+    if (!isObject(effort)) {
+      throw new Error(
+        `Codex model/list response has invalid reasoning effort at model index ${index}, effort index ${effortIndex}`,
+      );
+    }
+    const reasoningEffort = getRequiredString(effort, "reasoningEffort");
+    return reasoningEffort;
+  });
+  if (typeof value.isDefault !== "boolean") {
+    throw new Error(
+      `Codex model/list response has invalid isDefault at index ${index}`,
+    );
+  }
+  return {
+    model: getRequiredString(value, "model"),
+    displayName: getRequiredString(value, "displayName"),
+    supportedReasoningEfforts: efforts,
+    defaultReasoningEffort: getRequiredString(value, "defaultReasoningEffort"),
+    isDefault: value.isDefault,
+  };
+}
+
+function parseThreadSelection(value: unknown, method: string): ModelSelection {
+  const model = getRequiredString(value, "model");
+  if (!isObject(value) || !("reasoningEffort" in value)) {
+    throw new Error(`${method} response has no reasoningEffort`);
+  }
+  const reasoningEffort = value.reasoningEffort;
+  if (reasoningEffort !== null && typeof reasoningEffort !== "string") {
+    throw new Error(`${method} response has invalid reasoningEffort`);
+  }
+  return { model, effort: reasoningEffort };
+}
+
+function addSelectionToThreadStart(
+  params: JsonObject,
+  selection: ModelSelection | undefined,
+): void {
+  if (selection === undefined) return;
+  params.model = selection.model;
+  if (selection.effort !== null) {
+    params.config = { model_reasoning_effort: selection.effort };
+  }
+}
+
+function addSelectionToTurnStart(
+  params: JsonObject,
+  selection: ModelSelection | undefined,
+): void {
+  if (selection === undefined) return;
+  params.model = selection.model;
+  params.effort = selection.effort;
+}
+
+function addPermissionToThreadStart(
+  params: JsonObject,
+  permission: GatewayPermission | undefined,
+): void {
+  if (permission === undefined) return;
+  params.approvalPolicy = "never";
+  params.sandbox = permissionToSandboxMode(permission);
+}
+
+function addPermissionToTurnStart(
+  params: JsonObject,
+  permission: GatewayPermission | undefined,
+  cwd: string,
+): void {
+  if (permission === undefined) return;
+  params.approvalPolicy = "never";
+  params.sandboxPolicy = permissionToSandboxPolicy(permission, cwd);
+}
+
+function permissionToSandboxMode(permission: GatewayPermission): string {
+  switch (permission) {
+    case "full":
+      return "danger-full-access";
+    case "workspace":
+      return "workspace-write";
+    case "read-only":
+      return "read-only";
+  }
+}
+
+function permissionToSandboxPolicy(
+  permission: GatewayPermission,
+  cwd: string,
+): JsonObject {
+  switch (permission) {
+    case "full":
+      return { type: "dangerFullAccess" };
+    case "workspace":
+      return {
+        type: "workspaceWrite",
+        writableRoots: [cwd],
+        networkAccess: false,
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      };
+    case "read-only":
+      return { type: "readOnly", networkAccess: false };
+  }
 }
 
 function getId(value: unknown): JsonRpcId | undefined {

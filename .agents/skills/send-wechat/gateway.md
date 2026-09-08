@@ -6,8 +6,9 @@ the optional secretary has its own choice. Reuse that choice once given.
 
 The secretary uses the existing Hub's Weixin connection and one Codex CLI
 conversation. It runs independently of the Codex desktop app. Plain Weixin text
-becomes Codex input, including requests to use tools under the user's existing
-Codex permissions. Replies arrive as successive messages. `/newchat` selects
+becomes Codex input. Secretary turns default to full access; `/permission`
+selects full, workspace-write or read-only execution without changing global
+Codex configuration. Replies arrive as successive messages. `/newchat` selects
 blank conversation context; it preserves Codex configuration and tools.
 
 ## Check the Hub and package
@@ -44,8 +45,9 @@ Use the user's chosen Codex working directory. If none is established, ask which
 directory the secretary should work in; suggest a dedicated `~/wechat-secretary`
 directory. Resolve `~` to the Hub user's home, create the chosen directory if
 needed, and use its absolute path. This directory selects the files and project
-instructions Codex works with. Keep the existing model and permission settings;
-do not enable elevated execution to bypass an approval failure.
+instructions Codex works with. Preserve the existing model until the user selects
+another one with `/model`. Explain the secretary's full-access default and the
+`/permission` choices. Do not change global Codex permissions during setup.
 
 ## Start and verify
 
@@ -81,8 +83,20 @@ separately. If no test input/receipt is available, leave that verification pendi
 - New text interrupts the active reply. Actions already executed and Weixin
   messages already submitted can still take effect. Unknown outcomes are never
   automatically replayed.
-- `/newchat` clears the current conversation pointer; the next text starts the
-  fresh thread. Gateway restart normally resumes the existing thread.
+- `/` or `/help` returns the command menu after sending; the Weixin input box
+  does not provide gateway command autocomplete.
+- `/model` lists current Codex models and efforts. `/model astra low` selects
+  a supported combination for the next reply; unique model aliases are accepted.
+- `/permission` lists modes. `/permission full`, `/permission workspace` and
+  `/permission read-only` stop active execution before saving the new mode.
+- `/stream` shows the delivery mode; `/stream on` enables incremental blocks
+  and `/stream off` waits for each visible message to complete. The default is
+  on. Changes apply to the next reply without interrupting the active one;
+  selections persist across restart. Long completed messages still split at
+  the transport limit.
+- `/newchat` clears the current conversation pointer and reports the preserved
+  model, permission and stream setting. The next text starts the fresh thread and injects the
+  short connection skill. Gateway restart normally resumes the existing thread.
 - `send-wechat-gateway service stop` stops the secretary while ordinary sending
   remains available. Use `service start` to enable it again, and `service uninstall`
   to remove its service when requested. Do not use base Hub reset for this.

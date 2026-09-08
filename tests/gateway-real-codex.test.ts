@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CodexAppServer,
   type CodexEvent,
+  type ModelSelection,
 } from "../src/gateway/codex-client.js";
 
 const smokeBinary = process.env.CODEX_SMOKE_BINARY;
@@ -34,9 +35,12 @@ type FakeModelServer = {
   port: number;
 };
 
-async function startFakeModelServer(): Promise<FakeModelServer> {
+async function startFakeModelServer(
+  capturePath: string,
+): Promise<FakeModelServer> {
   const child = spawn(process.execPath, [modelServerFixture, "--port", "0"], {
     shell: false,
+    env: { ...process.env, FAKE_MODEL_CAPTURE_FILE: capturePath },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.setEncoding("utf8");
@@ -101,6 +105,15 @@ function codexEnvironment(codexHome: string): NodeJS.ProcessEnv {
   return environment;
 }
 
+function collectStrings(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(collectStrings).join("\n");
+  if (value !== null && typeof value === "object") {
+    return Object.values(value).map(collectStrings).join("\n");
+  }
+  return "";
+}
+
 function appServerArgs(port: number): string[] {
   return [
     "-c",
@@ -155,14 +168,18 @@ describe.skipIf(smokeBinary === undefined)(
       temporaryDirectories.push(root);
       const codexHome = path.join(root, "codex-home");
       const workspace = path.join(root, "workspace");
+      const modelCapture = path.join(root, "model-requests.jsonl");
       await Promise.all([mkdir(codexHome), mkdir(workspace)]);
 
       let modelServer: FakeModelServer | undefined;
       let firstClient: CodexAppServer | undefined;
       let secondClient: CodexAppServer | undefined;
       try {
-        modelServer = await startFakeModelServer();
-        const environment = codexEnvironment(codexHome);
+        modelServer = await startFakeModelServer(modelCapture);
+        const environment = {
+          ...codexEnvironment(codexHome),
+          FAKE_MODEL_CAPTURE_FILE: modelCapture,
+        };
         const args = appServerArgs(modelServer.port);
         const executable = smokeBinary;
         const firstEvents: CodexEvent[] = [];
@@ -175,10 +192,16 @@ describe.skipIf(smokeBinary === undefined)(
         });
         firstClient.onEvent((event) => firstEvents.push(event));
         await firstClient.connect();
-        const threadId = await firstClient.createThread();
+        const selection: ModelSelection = {
+          model: "gateway-test-model",
+          effort: "high",
+        };
+        const threadId = await firstClient.createThread(selection, "full");
         const firstTurnPromise = firstClient.startTurn(
           threadId,
           "Reply with exactly MOCK_OK.",
+          selection,
+          "full",
         );
         const firstCompletedPromise = waitForEvent(
           firstEvents,
@@ -206,6 +229,25 @@ describe.skipIf(smokeBinary === undefined)(
           itemId: expect.any(String),
           text: "MOCK_OK",
         });
+        const skillText = await readFile(
+          path.join(process.cwd(), ".agents/skills/wechat-connection/SKILL.md"),
+          "utf8",
+        );
+        const capturedRequests = (await readFile(modelCapture, "utf8"))
+          .trim()
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        const skillBody = skillText
+          .replace(/^---\n[\s\S]*?\n---\n?/, "")
+          .trim();
+        const capturedInput = collectStrings(capturedRequests[0]);
+        expect(capturedRequests.length).toBeGreaterThanOrEqual(1);
+        expect(capturedRequests[0]).toMatchObject({
+          model: selection.model,
+          reasoning: { effort: selection.effort },
+        });
+        expect(capturedInput).toContain(skillBody);
         await firstClient.close();
         firstClient = undefined;
 
@@ -219,7 +261,12 @@ describe.skipIf(smokeBinary === undefined)(
         });
         secondClient.onEvent((event) => secondEvents.push(event));
         await secondClient.connect();
-        await secondClient.resumeThread(threadId);
+        await expect(
+          secondClient.resumeThread(threadId),
+        ).resolves.toMatchObject({
+          model: expect.any(String),
+          effort: expect.anything(),
+        });
         const secondTurnPromise = secondClient.startTurn(
           threadId,
           "Reply with exactly MOCK_OK_AGAIN.",

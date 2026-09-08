@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { GatewayController } from "../src/gateway/controller.js";
-import type { CodexEvent, CodexPort } from "../src/gateway/codex-client.js";
+import type {
+  CodexEvent,
+  CodexPort,
+  ModelSelection,
+  GatewayPermission,
+} from "../src/gateway/codex-client.js";
 import {
   emptyGatewayState,
   type GatewayState,
@@ -38,7 +43,23 @@ class MemoryGatewayStateStore implements GatewayStateStore {
 }
 
 class FakeCodexPort implements CodexPort {
+  public readonly selections: Array<ModelSelection | undefined> = [];
+  public readonly permissions: Array<GatewayPermission | undefined> = [];
   public readonly createdThreads: string[] = [];
+  public async getDefaultSelection(): Promise<ModelSelection> {
+    return { model: "gpt-6-astra", effort: "medium" };
+  }
+  public async listModels() {
+    return [
+      {
+        model: "gpt-6-astra",
+        displayName: "Astra",
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        defaultReasoningEffort: "medium",
+        isDefault: true,
+      },
+    ];
+  }
   public readonly resumedThreads: string[] = [];
   public readonly startCalls: StartCall[] = [];
   public readonly interruptCalls: Array<{ threadId: string; turnId: string }> =
@@ -70,11 +91,19 @@ class FakeCodexPort implements CodexPort {
     return threadId;
   }
 
-  public async resumeThread(threadId: string): Promise<void> {
+  public async resumeThread(threadId: string): Promise<ModelSelection> {
     this.resumedThreads.push(threadId);
+    return this.getDefaultSelection();
   }
 
-  public startTurn(threadId: string, text: string): Promise<string> {
+  public startTurn(
+    threadId: string,
+    text: string,
+    selection?: ModelSelection,
+    permission?: GatewayPermission,
+  ): Promise<string> {
+    this.selections.push(selection);
+    this.permissions.push(permission);
     const turnId = `turn-${this.startCalls.length + 1}`;
     this.startCalls.push({ threadId, text, turnId });
     if (this.nextStartError !== undefined) {
@@ -225,6 +254,324 @@ async function finishTurn(
 }
 
 describe("GatewayController", () => {
+  it("applies model selection to the next turn while preserving the current answer", async () => {
+    const harness = makeHarness();
+    await harness.controller.initialize();
+    await harness.controller.accept([message("first", "hello")]);
+    await harness.controller.accept([message("model", "/model astra low")]);
+    expect(harness.codex.interruptCalls).toEqual([]);
+    await finishTurn(
+      harness.codex,
+      harness.codex.startCalls[0]!,
+      "original answer",
+    );
+    expect(harness.sent.at(-1)?.text).toContain("original answer");
+    await harness.controller.accept([message("next", "continue")]);
+    expect(harness.codex.selections).toEqual([
+      { model: "gpt-6-astra", effort: "medium" },
+      { model: "gpt-6-astra", effort: "low" },
+    ]);
+  });
+
+  it("keeps menus and invalid commands out of Codex without interrupting a reply", async () => {
+    const harness = makeHarness();
+    await harness.controller.initialize();
+    await harness.controller.accept([message("start", "hello")]);
+    for (const [index, command] of [
+      "/",
+      "／help",
+      "/model",
+      "/permission",
+      "/mod",
+      "/model astra impossible",
+      "/permission bad",
+      "/stream",
+      "/stream maybe",
+    ].entries()) {
+      await harness.controller.accept([message(`menu-${index}`, command)]);
+    }
+    expect(harness.codex.startCalls).toHaveLength(1);
+    expect(harness.codex.interruptCalls).toEqual([]);
+    expect(harness.sent.map(({ text }) => text).join("\n")).toContain(
+      "未识别命令",
+    );
+    await finishTurn(
+      harness.codex,
+      harness.codex.startCalls[0]!,
+      "answer survived",
+    );
+    expect(harness.sent.at(-1)?.text).toContain("answer survived");
+  });
+
+  it("persists a validated model across restart and newchat and forwards it on turns", async () => {
+    const first = makeHarness();
+    await first.controller.initialize();
+    await first.controller.accept([
+      message("model", "/model astra low"),
+      message("input", "hello"),
+    ]);
+    expect(first.codex.selections).toEqual([
+      { model: "gpt-6-astra", effort: "low" },
+    ]);
+    expect(first.codex.permissions).toEqual(["full"]);
+    await finishTurn(first.codex, first.codex.startCalls[0]!, "done");
+    await first.controller.close();
+    const second = makeHarness(first.store.snapshot(), 2);
+    await second.controller.initialize();
+    await second.controller.accept([message("new", "/newchat")]);
+    expect(second.sent.at(-1)?.text).toContain("gpt-6-astra · low");
+    expect(second.sent.at(-1)?.text).toContain("完全访问");
+    await second.controller.accept([message("input-2", "continue")]);
+    expect(second.codex.selections).toEqual([
+      { model: "gpt-6-astra", effort: "low" },
+    ]);
+    expect(second.codex.createdThreads).toEqual(["thread-2"]);
+  });
+
+  it("stops active execution before persisting a reduced permission mode", async () => {
+    const harness = makeHarness();
+    await harness.controller.initialize();
+    await harness.controller.accept([message("first", "work")]);
+    const change = harness.controller.accept([
+      message("permission", "/permission read-only"),
+    ]);
+    await waitFor(() => harness.codex.interruptCalls.length === 1);
+    expect(harness.store.snapshot().permission).toBeUndefined();
+    harness.codex.emit({
+      type: "turn-completed",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      status: "interrupted",
+    });
+    await change;
+    expect(harness.store.snapshot().permission).toBe("read-only");
+    await harness.controller.accept([
+      message("new", "/newchat"),
+      message("next", "read"),
+    ]);
+    expect(harness.codex.permissions).toEqual(["full", "read-only"]);
+    expect(harness.sent.map(({ text }) => text).join("\n")).toContain(
+      "当前权限：只读",
+    );
+    await harness.controller.close();
+    const restarted = makeHarness(harness.store.snapshot());
+    await restarted.controller.initialize();
+    await restarted.controller.accept([message("resumed", "read again")]);
+    expect(restarted.codex.permissions).toEqual(["read-only"]);
+  });
+
+  it("does not change permissions when interruption cannot be confirmed", async () => {
+    const harness = makeHarness();
+    await harness.controller.initialize();
+    await harness.controller.accept([message("first", "work")]);
+    await harness.controller.accept([
+      message("permission", "/permission read-only"),
+    ]);
+    expect(harness.store.snapshot().permission).toBeUndefined();
+    expect(harness.errors).toContain("GATEWAY_INTERRUPT_TIMEOUT");
+  });
+
+  it("keeps stream commands in the gateway and defaults to enabled", async () => {
+    const harness = makeHarness();
+    await harness.controller.initialize();
+
+    await harness.controller.accept([message("query", "/stream")]);
+    expect(harness.sent.at(-1)?.text).toContain("当前流式发送：开启");
+    expect(harness.codex.startCalls).toHaveLength(0);
+    expect(harness.codex.interruptCalls).toHaveLength(0);
+
+    await harness.controller.accept([message("invalid", "/stream maybe")]);
+    expect(harness.sent.at(-1)?.text).toContain("流式发送选项无效");
+    expect(harness.store.snapshot().streamEnabled).toBeUndefined();
+    expect(harness.codex.startCalls).toHaveLength(0);
+    expect(harness.codex.interruptCalls).toHaveLength(0);
+
+    await harness.controller.accept([message("off", "/stream off")]);
+    expect(harness.store.snapshot().streamEnabled).toBe(false);
+    expect(harness.sent.at(-1)?.text).toContain("关闭流式发送");
+  });
+
+  it("persists stream mode through newchat and restart", async () => {
+    const first = makeHarness();
+    await first.controller.initialize();
+    await first.controller.accept([message("off", "/stream off")]);
+    await first.controller.accept([message("new", "/newchat")]);
+    expect(first.sent.at(-1)?.text).toContain("当前流式发送：关闭");
+    const saved = first.store.snapshot();
+    await first.controller.close();
+
+    const restarted = makeHarness(saved, 2);
+    await restarted.controller.initialize();
+    await restarted.controller.accept([message("query", "/stream")]);
+    expect(restarted.sent.at(-1)?.text).toContain("当前流式发送：关闭");
+  });
+
+  it("does not flush an unfinished complete-message reply for a notice", async () => {
+    const harness = makeHarness({
+      ...emptyGatewayState(),
+      streamEnabled: false,
+    });
+    await harness.controller.initialize();
+    await harness.controller.accept([message("input", "hello")]);
+    const call = harness.codex.startCalls[0]!;
+    harness.codex.emit({
+      type: "delta",
+      threadId: call.threadId,
+      turnId: call.turnId,
+      itemId: "item-1",
+      text: "unfinished answer",
+    });
+    await tick();
+    expect(harness.sent.map(({ text }) => text).join("\n")).not.toContain(
+      "unfinished answer",
+    );
+
+    harness.codex.emit({
+      type: "notice",
+      threadId: call.threadId,
+      turnId: call.turnId,
+      text: "progress notice",
+    });
+    await waitFor(() =>
+      harness.sent.some(({ text }) => text.includes("progress notice")),
+    );
+    expect(harness.sent.map(({ text }) => text).join("\n")).not.toContain(
+      "unfinished answer",
+    );
+
+    harness.codex.emit({
+      type: "message-completed",
+      threadId: call.threadId,
+      turnId: call.turnId,
+      itemId: "item-1",
+      text: "unfinished answer",
+    });
+    harness.codex.emit({
+      type: "turn-completed",
+      threadId: call.threadId,
+      turnId: call.turnId,
+      status: "completed",
+    });
+    await waitFor(() =>
+      harness.sent.some(({ text }) => text.includes("unfinished answer")),
+    );
+    expect(
+      harness.sent.find(({ text }) => text.includes("unfinished answer")),
+    ).toEqual(expect.objectContaining({ text: "unfinished answer\n" }));
+  });
+
+  it.each([
+    {
+      name: "on to off",
+      initial: emptyGatewayState(),
+      toggle: "/stream off",
+      nextStreamEnabled: false,
+    },
+    {
+      name: "off to on",
+      initial: { ...emptyGatewayState(), streamEnabled: false },
+      toggle: "/stream on",
+      nextStreamEnabled: true,
+    },
+  ])(
+    "snapshots stream mode for the active turn ($name)",
+    async ({ initial, toggle, nextStreamEnabled }) => {
+      const harness = makeHarness(initial);
+      const activeStreamEnabled = !nextStreamEnabled;
+      await harness.controller.initialize();
+      await harness.controller.accept([message("first", "first")]);
+      const firstCall = harness.codex.startCalls[0]!;
+      const firstPart = `${"a".repeat(200)}。`;
+      const secondPart = `${"b".repeat(200)}。`;
+      harness.codex.emit({
+        type: "delta",
+        threadId: firstCall.threadId,
+        turnId: firstCall.turnId,
+        itemId: "item-1",
+        text: firstPart,
+      });
+      if (activeStreamEnabled === false) await tick();
+      else
+        await waitFor(() =>
+          harness.sent.some(({ text }) => text.includes(firstPart)),
+        );
+
+      await harness.controller.accept([message("toggle", toggle)]);
+      expect(harness.codex.interruptCalls).toEqual([]);
+      harness.codex.emit({
+        type: "delta",
+        threadId: firstCall.threadId,
+        turnId: firstCall.turnId,
+        itemId: "item-1",
+        text: secondPart,
+      });
+      if (activeStreamEnabled === false) {
+        await tick();
+        expect(harness.sent.some(({ text }) => text.includes(firstPart))).toBe(
+          false,
+        );
+        expect(harness.sent.some(({ text }) => text.includes(secondPart))).toBe(
+          false,
+        );
+      } else
+        await waitFor(() =>
+          harness.sent.some(({ text }) => text.includes(secondPart)),
+        );
+
+      harness.codex.emit({
+        type: "message-completed",
+        threadId: firstCall.threadId,
+        turnId: firstCall.turnId,
+        itemId: "item-1",
+        text: firstPart + secondPart,
+      });
+      harness.codex.emit({
+        type: "turn-completed",
+        threadId: firstCall.threadId,
+        turnId: firstCall.turnId,
+        status: "completed",
+      });
+      await tick();
+
+      await harness.controller.accept([message("next", "next")]);
+      const nextCall = harness.codex.startCalls[1]!;
+      const future = `${"c".repeat(200)}。`;
+      harness.codex.emit({
+        type: "delta",
+        threadId: nextCall.threadId,
+        turnId: nextCall.turnId,
+        itemId: "item-2",
+        text: future,
+      });
+      if (nextStreamEnabled) {
+        await waitFor(() =>
+          harness.sent.some(({ text }) => text.includes(future)),
+        );
+      } else {
+        await tick();
+        expect(harness.sent.some(({ text }) => text.includes(future))).toBe(
+          false,
+        );
+        harness.codex.emit({
+          type: "message-completed",
+          threadId: nextCall.threadId,
+          turnId: nextCall.turnId,
+          itemId: "item-2",
+          text: future,
+        });
+        await waitFor(() =>
+          harness.sent.some(({ text }) => text.includes(future)),
+        );
+      }
+      harness.codex.emit({
+        type: "turn-completed",
+        threadId: nextCall.threadId,
+        turnId: nextCall.turnId,
+        status: "completed",
+      });
+    },
+  );
+
   it("creates once, reuses and resumes the thread, then starts a blank new chat", async () => {
     const first = makeHarness();
     await first.controller.initialize();

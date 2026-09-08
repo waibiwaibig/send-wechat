@@ -129,4 +129,15 @@ describe("gateway storage", () => {
       state,
     );
   });
+
+  it("accepts an absent stream choice and persists an explicit off choice", async () => {
+    const root = await fixtureRoot();
+    const file = path.join(root, "gateway", "state.json");
+    const store = new JsonGatewayStateStore(file);
+
+    await expect(store.load()).resolves.toEqual(emptyGatewayState());
+    const state = { ...emptyGatewayState(), streamEnabled: false };
+    await store.save(state);
+    await expect(store.load()).resolves.toEqual(state);
+  });
 });

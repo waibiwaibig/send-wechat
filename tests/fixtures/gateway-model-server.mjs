@@ -1,9 +1,16 @@
 import { createServer } from "node:http";
+import { appendFileSync } from "node:fs";
 
 const requestedPort = Number(
   process.argv[process.argv.indexOf("--port") + 1] ?? 0,
 );
 let responseNumber = 0;
+
+function captureRequest(body) {
+  const capturePath = process.env.FAKE_MODEL_CAPTURE_FILE;
+  if (!capturePath) return;
+  appendFileSync(capturePath, `${JSON.stringify(body)}\n`);
+}
 
 function outputItem(responseId, itemId, text, status) {
   return {
@@ -128,8 +135,20 @@ const server = createServer((request, response) => {
     request.resume();
     return;
   }
-  request.resume();
-  request.once("end", () => streamResponse(response));
+  const chunks = [];
+  request.on("data", (chunk) => chunks.push(chunk));
+  request.once("end", () => {
+    let body;
+    try {
+      body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch {
+      response.writeHead(400, { "content-type": "text/plain" });
+      response.end("invalid request body");
+      return;
+    }
+    captureRequest(body);
+    streamResponse(response);
+  });
 });
 
 server.on("error", (error) => {

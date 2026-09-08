@@ -1,4 +1,5 @@
 import readline from "node:readline";
+import { appendFileSync } from "node:fs";
 
 const mode = process.env.FAKE_CODEX_MODE ?? "normal";
 const MAX_FRAME_BYTES = 1_048_576;
@@ -7,6 +8,9 @@ let nextTurn = 1;
 let pendingServerRequest = null;
 let pendingTurnRequest = null;
 let lastServerResponse = null;
+const resumedThreads = new Set();
+const createdThreads = new Set();
+const turnCounts = new Map();
 
 function send(message, ending = "\n") {
   process.stdout.write(`${JSON.stringify(message)}${ending}`);
@@ -36,6 +40,209 @@ function thread(id) {
     turns: [],
     updatedAt: 1,
   };
+}
+
+function threadResponse(id, reasoningEffort = "medium") {
+  return {
+    thread: thread(id),
+    model: "fake-model",
+    modelProvider: "fake",
+    serviceTier: null,
+    cwd: process.cwd(),
+    instructionSources: [],
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: { type: "dangerFullAccess" },
+    reasoningEffort,
+  };
+}
+
+function model(
+  modelId,
+  displayName,
+  isDefault,
+  defaultReasoningEffort = "medium",
+) {
+  return {
+    id: modelId,
+    model: modelId,
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    displayName,
+    description: displayName,
+    modelSpecialty: null,
+    hidden: false,
+    supportedReasoningEfforts: [
+      { reasoningEffort: "low", description: "low" },
+      { reasoningEffort: "medium", description: "medium" },
+      { reasoningEffort: "high", description: "high" },
+    ],
+    defaultReasoningEffort,
+    inputModalities: ["text"],
+    supportsPersonality: false,
+    multiAgentVersion: null,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
+    isDefault,
+  };
+}
+
+const MODEL_ONE = model("fake-model", "Fake Model", true);
+const MODEL_TWO = model("fake-model-2", "Fake Model Two", false, "high");
+
+function modelListPage(cursor) {
+  if (mode === "model-pages") {
+    if (cursor === undefined) {
+      return { data: [MODEL_ONE], nextCursor: "page-2" };
+    }
+    if (cursor === "page-2") {
+      return { data: [MODEL_TWO], nextCursor: null };
+    }
+  }
+  if (mode === "model-repeat") {
+    return { data: [MODEL_ONE], nextCursor: "page-1" };
+  }
+  if (mode === "model-many") {
+    const page = cursor === undefined ? 1 : Number(cursor);
+    return { data: [MODEL_ONE], nextCursor: String(page + 1) };
+  }
+  if (mode === "model-invalid-data") {
+    return { data: "invalid", nextCursor: null };
+  }
+  if (mode === "model-invalid-cursor") {
+    return { data: [MODEL_ONE], nextCursor: 1 };
+  }
+  return { data: [MODEL_ONE, MODEL_TWO], nextCursor: null };
+}
+
+function configResponse() {
+  switch (mode) {
+    case "config-values":
+      return {
+        model: "configured-model",
+        model_reasoning_effort: "high",
+      };
+    case "config-model":
+      return { model: "fake-model-2", model_reasoning_effort: null };
+    case "config-effort":
+      return { model: null, model_reasoning_effort: "low" };
+    case "config-invalid":
+      return { model: 42, model_reasoning_effort: null };
+    default:
+      return { model: null, model_reasoning_effort: null };
+  }
+}
+
+function capture(message) {
+  const capturePath = process.env.FAKE_CODEX_CAPTURE_FILE;
+  if (!capturePath) return;
+  appendFileSync(
+    capturePath,
+    `${JSON.stringify({ method: message.method, params: message.params ?? null })}\n`,
+  );
+}
+
+function invalidPayload(message, expected) {
+  if (mode === "validate-null-selection" && message.method === "thread/start") {
+    const params = message.params ?? {};
+    if (params.model !== expected.model || Object.hasOwn(params, "config")) {
+      errorResponse(message.id, -32007, "invalid null selection payload");
+      return true;
+    }
+  }
+  if (mode === "validate-selection") {
+    const params = message.params ?? {};
+    if (
+      params.model !== expected.model ||
+      params.config?.model_reasoning_effort !== expected.effort
+    ) {
+      errorResponse(message.id, -32003, "invalid selection payload");
+      return true;
+    }
+  }
+  if (mode === "validate-turn-selection" && message.method === "turn/start") {
+    const params = message.params ?? {};
+    if (params.model !== expected.model || params.effort !== expected.effort) {
+      errorResponse(message.id, -32003, "invalid turn selection payload");
+      return true;
+    }
+  }
+  if (
+    mode === "validate-permission" &&
+    (message.method === "thread/start" || message.method === "turn/start")
+  ) {
+    const params = message.params ?? {};
+    const permission = process.env.FAKE_CODEX_PERMISSION ?? "full";
+    const expectedMode =
+      permission === "full"
+        ? "danger-full-access"
+        : permission === "workspace"
+          ? "workspace-write"
+          : "read-only";
+    if (message.method === "thread/start") {
+      if (
+        params.approvalPolicy !== "never" ||
+        params.sandbox !== expectedMode
+      ) {
+        errorResponse(message.id, -32004, "invalid thread permission payload");
+        return true;
+      }
+    } else {
+      const expectedType =
+        permission === "full"
+          ? "dangerFullAccess"
+          : permission === "workspace"
+            ? "workspaceWrite"
+            : "readOnly";
+      if (
+        params.approvalPolicy !== "never" ||
+        params.sandboxPolicy?.type !== expectedType ||
+        (permission === "workspace" &&
+          JSON.stringify(params.sandboxPolicy.writableRoots) !==
+            JSON.stringify([process.cwd()])) ||
+        (permission === "workspace" &&
+          (params.sandboxPolicy.excludeTmpdirEnvVar !== true ||
+            params.sandboxPolicy.excludeSlashTmp !== true))
+      ) {
+        errorResponse(message.id, -32004, "invalid turn permission payload");
+        return true;
+      }
+    }
+  }
+  if (
+    (mode === "validate-bootstrap" || mode === "bootstrap-error") &&
+    message.method === "turn/start"
+  ) {
+    const params = message.params ?? {};
+    const threadId = params.threadId;
+    const count = turnCounts.get(threadId) ?? 0;
+    const input = params.input;
+    const resumed = resumedThreads.has(threadId);
+    const wantsSkill = createdThreads.has(threadId) && !resumed && count === 0;
+    const valid =
+      Array.isArray(input) &&
+      input.length === (wantsSkill ? 2 : 1) &&
+      (wantsSkill
+        ? input[0]?.type === "skill" &&
+          input[0]?.name === "wechat-connection" &&
+          typeof input[0]?.path === "string" &&
+          input[0].path.endsWith(".agents/skills/wechat-connection/SKILL.md") &&
+          input[1]?.type === "text" &&
+          input[1]?.text === "hello"
+        : input[0]?.type === "text" && input[0]?.text === "hello");
+    if (!valid) {
+      errorResponse(message.id, -32005, "invalid bootstrap skill payload");
+      return true;
+    }
+    if (mode === "bootstrap-error" && count === 0) {
+      turnCounts.set(threadId, 1);
+      errorResponse(message.id, -32006, "bootstrap turn failed");
+      return true;
+    }
+  }
+  return false;
 }
 
 function turn(id, status = "inProgress") {
@@ -220,6 +427,8 @@ input.on("line", (line) => {
     return;
   }
 
+  capture(message);
+
   if (
     message.id !== undefined &&
     (message.result !== undefined || message.error !== undefined) &&
@@ -243,6 +452,51 @@ input.on("line", (line) => {
     return;
   }
   if (message.method === "initialized") return;
+  if (message.method === "skills/extraRoots/set") {
+    if (mode === "registration-error") {
+      errorResponse(message.id, 400, "skill registration failed");
+      return;
+    }
+    if (
+      mode === "validate-bootstrap" &&
+      (!Array.isArray(message.params?.extraRoots) ||
+        message.params.extraRoots.length !== 1 ||
+        !message.params.extraRoots[0].endsWith("/.agents/skills"))
+    ) {
+      errorResponse(message.id, -32008, "invalid skill extra roots payload");
+      return;
+    }
+    response(message.id, {});
+    return;
+  }
+  if (message.method === "model/list") {
+    if (mode === "model-error") {
+      errorResponse(message.id, 400, "model list failed");
+      return;
+    }
+    response(message.id, modelListPage(message.params?.cursor));
+    return;
+  }
+  if (message.method === "config/read") {
+    if (mode === "config-error") {
+      errorResponse(message.id, 400, "config read failed");
+      return;
+    }
+    if (
+      mode === "config-payload" &&
+      (message.params?.cwd !== process.cwd() ||
+        message.params?.includeLayers !== false)
+    ) {
+      errorResponse(message.id, -32002, "invalid config/read payload");
+      return;
+    }
+    response(message.id, {
+      config: configResponse(),
+      origins: {},
+      layers: null,
+    });
+    return;
+  }
   if (message.method === "thread/start") {
     if (mode === "timeout" || mode === "timeout-all") return;
     if (mode === "exit-thread") {
@@ -257,12 +511,23 @@ input.on("line", (line) => {
       response(message.id, {});
       return;
     }
-    response(message.id, { thread: thread(`thread-${nextThread++}`) });
+    if (
+      invalidPayload(message, {
+        model: "selected-model",
+        effort: "high",
+      })
+    ) {
+      return;
+    }
+    const threadId = `thread-${nextThread++}`;
+    createdThreads.add(threadId);
+    response(message.id, threadResponse(threadId));
     return;
   }
   if (message.method === "thread/resume") {
     if (mode === "timeout-all") return;
-    response(message.id, { thread: thread(message.params.threadId) });
+    resumedThreads.add(message.params.threadId);
+    response(message.id, threadResponse(message.params.threadId));
     return;
   }
   if (message.method === "turn/start") {
@@ -322,6 +587,18 @@ input.on("line", (line) => {
       process.exit(0);
       return;
     }
+    if (
+      invalidPayload(message, {
+        model: "selected-model",
+        effort: "high",
+      })
+    ) {
+      return;
+    }
+    turnCounts.set(
+      message.params.threadId,
+      (turnCounts.get(message.params.threadId) ?? 0) + 1,
+    );
     if (mode === "unknown-response") send({ id: 999, result: {} });
     if (serverRequestSpec()) {
       pendingTurnRequest = message.id;

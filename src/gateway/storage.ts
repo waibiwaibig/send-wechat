@@ -21,6 +21,17 @@ const messageId = z.string().min(1).max(256);
 export const gatewayStateSchema = z.strictObject({
   schemaVersion: z.literal(1),
   threadId: z.string().min(1).max(256).nullable(),
+  // Absent means inherit Codex's current thread/config selection.
+  selection: z
+    .strictObject({
+      model: z.string().min(1).max(256),
+      effort: z.string().min(1).max(64).nullable(),
+    })
+    .optional(),
+  // An unselected secretary uses full access; this is local to gateway turns.
+  permission: z.enum(["full", "workspace", "read-only"]).optional(),
+  // Absent preserves the historical default of incremental delivery.
+  streamEnabled: z.boolean().optional(),
   handled: z.array(messageId).max(10_000),
   pending: z.array(messageId).max(50),
   lastError: z.string().max(128).nullable(),

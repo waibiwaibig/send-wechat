@@ -100,7 +100,9 @@ from ordinary session renewal and outbound sends. Relay clients do not consume
 this inbox.
 
 The independent gateway maps inbox text to one Codex app-server thread, maps
-visible reply events to bounded Weixin blocks, and handles `/newchat`. It stores
+visible reply events to bounded Weixin blocks, and handles the command menu,
+model selection, permission modes, stream delivery preference and `/newchat`. Secretary turns default to
+full access; `/permission` changes the Codex sandbox for subsequent input. It stores
 its own current thread pointer and input-handoff metadata. Codex retains all
 conversation history and execution capabilities. Distinct platform service
 identities allow the gateway and the base Hub to run and stop independently.

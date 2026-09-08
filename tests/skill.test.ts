@@ -127,6 +127,9 @@ describe("Agent skill discovery contract", () => {
     { timeout: 20_000 },
     async () => {
       const packagePaths = await packedPaths();
+      expect(packagePaths).toContain(
+        ".agents/skills/wechat-connection/SKILL.md",
+      );
       const linkedFiles = await linkedMarkdownFiles();
 
       expect(linkedFiles.map((fileUrl) => fileUrl.href)).toContain(

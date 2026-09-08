@@ -54,6 +54,12 @@ const fakeCodex = vi.hoisted(() => {
       control.instances.push(this);
     }
 
+    public async getDefaultSelection() {
+      return { model: "gpt-6-astra", effort: "medium" };
+    }
+    public async listModels() {
+      return [];
+    }
     public async connect(): Promise<void> {}
 
     public async close(): Promise<void> {
@@ -66,8 +72,9 @@ const fakeCodex = vi.hoisted(() => {
       return threadId;
     }
 
-    public async resumeThread(threadId: string): Promise<void> {
+    public async resumeThread(threadId: string) {
       this.resumes.push(threadId);
+      return this.getDefaultSelection();
     }
 
     public startTurn(threadId: string, text: string): Promise<string> {
