@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, rm } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 
 import { z } from "zod";
+
+import { renameFile } from "../platform/atomic-rename.js";
 
 const absolutePath = z.string().min(1).max(16_384).refine(isAbsolute);
 
@@ -113,7 +115,7 @@ export async function writeGatewayFile<T>(
     } finally {
       await handle.close();
     }
-    await rename(temporary, file);
+    await renameFile(temporary, file);
     if (process.platform !== "win32") {
       const parent = await open(directory, constants.O_RDONLY);
       try {

@@ -1,17 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import {
-  chmod,
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  rename,
-  rm,
-} from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { z } from "zod";
+
+import { renameFile } from "../platform/atomic-rename.js";
 
 const relayUrl = z
   .string()
@@ -126,7 +120,7 @@ export class JsonInstallationStore {
       } finally {
         await handle.close();
       }
-      await rename(temporaryPath, this.filePath);
+      await renameFile(temporaryPath, this.filePath);
       if (process.platform !== "win32") await chmod(this.filePath, 0o600);
       await syncDirectory(directory);
     } catch (error) {

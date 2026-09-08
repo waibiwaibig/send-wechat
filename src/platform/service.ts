@@ -1,12 +1,4 @@
-import {
-  access,
-  chmod,
-  mkdir,
-  open,
-  rename,
-  rm,
-  unlink,
-} from "node:fs/promises";
+import { access, chmod, mkdir, open, rm, unlink } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
 
@@ -22,6 +14,7 @@ import {
   type PlatformPaths,
   type SupportedPlatform,
 } from "./paths.js";
+import { renameFile } from "./atomic-rename.js";
 
 const DEFAULT_SERVICE_IDENTITY = {
   label: "io.github.waibiwaibig.send-wechat",
@@ -215,7 +208,7 @@ async function writeOwnerConfig(
     await handle.sync();
     await handle.close();
     if (process.platform !== "win32") await chmod(temporaryPath, 0o600);
-    await rename(temporaryPath, configPath);
+    await renameFile(temporaryPath, configPath);
   } catch (error) {
     await handle.close().catch(() => undefined);
     await rm(temporaryPath, { force: true }).catch(() => undefined);

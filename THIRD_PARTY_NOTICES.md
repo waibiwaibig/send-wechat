@@ -44,9 +44,10 @@ Tencent 上游许可证 notice：
 | Package                     | Locked version | License           |
 | --------------------------- | -------------: | ----------------- |
 | `@napi-rs/keyring`          |        `1.3.0` | MIT               |
-| `@vscode/os-proxy-resolver` |        `0.3.0` | MIT               |
+| `@vscode/os-proxy-resolver` |        `0.4.0` | MIT               |
 | `commander`                 |       `15.0.0` | MIT               |
 | `file-type`                 |       `22.0.2` | MIT               |
+| `p-retry`                   |        `8.0.1` | MIT               |
 | `qrcode`                    |        `1.5.4` | MIT               |
 | `proxy-agent`               |        `8.0.2` | MIT               |
 | `undici`                    |       `8.10.0` | MIT               |
@@ -63,10 +64,10 @@ Tencent 上游许可证 notice：
 | `@types/node`               |      `24.13.3` | MIT               |
 | `@types/qrcode`             |        `1.5.6` | MIT               |
 | `@types/ws`                 |       `8.18.1` | MIT               |
-| `@cloudflare/vitest-plugin` |        `1.0.0` | MIT               |
+| `@cloudflare/vitest-plugin` |        `1.1.4` | MIT               |
 | `@cloudflare/workers-types` | `5.20260823.1` | MIT OR Apache-2.0 |
 | `@vitest/coverage-v8`       |       `4.1.11` | MIT               |
-| `eslint`                    |       `10.9.0` | MIT               |
+| `eslint`                    |       `10.9.1` | MIT               |
 | `prettier`                  |        `3.9.6` | MIT               |
 | `typescript`                |        `6.0.3` | Apache-2.0        |
 | `typescript-eslint`         |       `8.67.0` | MIT               |

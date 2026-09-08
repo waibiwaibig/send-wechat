@@ -91,6 +91,12 @@ The file contains only the remote client's own relay credential. Windows clients
 use native storage. There is no process-environment credential source or
 role-crossing fallback.
 
+Atomic file replacement is a shared platform operation. Windows readers can
+temporarily block replacement, so the operation retries transient sharing errors
+within a bounded window while retaining the existing destination. Stores retain
+their own validation, exclusive temporary-file creation, syncing and cleanup.
+See ADR 0008.
+
 ### Optional text inbox and Codex gateway
 
 The Hub's authenticated local text inbox is a generic transport seam. An active

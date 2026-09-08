@@ -1,14 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import {
-  chmod,
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  rename,
-  rm,
-} from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { z } from "zod";
@@ -19,6 +11,7 @@ import {
   type RelayCredential,
   type ClientRelayCredential,
 } from "./relay-credential-store.js";
+import { renameFile } from "../platform/atomic-rename.js";
 import type { PlatformPaths } from "../platform/paths.js";
 
 const MAX_STORED_BYTES = 64 * 1024;
@@ -175,7 +168,7 @@ export class OwnerOnlyClientRelayCredentialStore {
         await handle.close();
       }
       await chmod(temporaryPath, 0o600);
-      await rename(temporaryPath, this.filePath);
+      await renameFile(temporaryPath, this.filePath);
       await chmod(this.filePath, 0o600);
       await syncDirectory(directory);
     } catch (error) {

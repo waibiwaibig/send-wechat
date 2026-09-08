@@ -2,7 +2,7 @@ import {
   randomBytes as cryptoRandomBytes,
   randomUUID as cryptoRandomUUID,
 } from "node:crypto";
-import { chmod, lstat, open, rename, rm } from "node:fs/promises";
+import { chmod, lstat, open, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +38,7 @@ import {
   type ServiceManager,
   type ServiceManagerDependencies,
 } from "../platform/service.js";
+import { renameFile } from "../platform/atomic-rename.js";
 import {
   CloudflareProvisioner,
   CloudflareProvisioningError,
@@ -693,7 +694,7 @@ export class CliContext {
       await handle.writeFile(png);
       await handle.sync();
       await handle.close();
-      await rename(temporaryPath, resolvedPath);
+      await renameFile(temporaryPath, resolvedPath);
       if (process.platform !== "win32") await chmod(resolvedPath, 0o600);
     } catch (error) {
       await handle.close().catch(() => undefined);
