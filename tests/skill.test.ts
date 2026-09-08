@@ -86,6 +86,10 @@ async function packedPaths(): Promise<Set<string>> {
   return new Set(manifest.files.map(({ path }) => path));
 }
 
+function extractFrontmatter(source: string): string {
+  return source.match(/^---\r?\n([\s\S]*?)\r?\n---/u)?.[1] ?? "";
+}
+
 describe("Agent skill discovery contract", () => {
   it("keeps the skill at the discoverable path and ships its directory in npm", async () => {
     const packageJson = JSON.parse(
@@ -106,15 +110,21 @@ describe("Agent skill discovery contract", () => {
 
   it("keeps implicit invocation and the direct send trigger in the skill metadata", async () => {
     const skill = await readFile(new URL("SKILL.md", skillRootUrl), "utf8");
-    const frontmatter = skill.match(/^---\n([\s\S]*?)\n---/u)?.[1] ?? "";
-    const description = frontmatter.match(/^description:\s*(.+)$/mu)?.[1] ?? "";
     const policyUrl = new URL("agents/openai.yaml", skillRootUrl);
 
-    expect(frontmatter).not.toMatch(/^\s*disable-model-invocation\s*:/mu);
-    expect(description).toMatch(/发微信/u);
-    expect(description).toMatch(/WeChat|Weixin/u);
-    expect(description).toMatch(/message|file/u);
-    expect(description).toMatch(/install|set up|pair|diagnos/u);
+    for (const lineEnding of ["\n", "\r\n"] as const) {
+      const variant = skill.replace(/\r?\n/gu, lineEnding);
+      const frontmatter = extractFrontmatter(variant);
+      const description =
+        frontmatter.match(/^description:\s*(.+)$/mu)?.[1] ?? "";
+
+      expect(frontmatter).not.toBe("");
+      expect(frontmatter).not.toMatch(/^\s*disable-model-invocation\s*:/mu);
+      expect(description).toMatch(/发微信/u);
+      expect(description).toMatch(/WeChat|Weixin/u);
+      expect(description).toMatch(/message|file/u);
+      expect(description).toMatch(/install|set up|pair|diagnos/u);
+    }
 
     if (await pathExists(policyUrl)) {
       const policy = await readFile(policyUrl, "utf8");

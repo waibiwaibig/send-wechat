@@ -1,8 +1,17 @@
 import readline from "node:readline";
 import { appendFileSync } from "node:fs";
+import { isAbsolute, join, sep } from "node:path";
 
 const mode = process.env.FAKE_CODEX_MODE ?? "normal";
 const MAX_FRAME_BYTES = 1_048_576;
+const skillRootSuffix = join(".agents", "skills");
+const connectionSkillSuffix = join(
+  skillRootSuffix,
+  "wechat-connection",
+  "SKILL.md",
+);
+const skillRootPathSuffix = `${sep}${skillRootSuffix}`;
+const connectionSkillPathSuffix = `${sep}${connectionSkillSuffix}`;
 let nextThread = 1;
 let nextTurn = 1;
 let pendingServerRequest = null;
@@ -228,7 +237,8 @@ function invalidPayload(message, expected) {
         ? input[0]?.type === "skill" &&
           input[0]?.name === "wechat-connection" &&
           typeof input[0]?.path === "string" &&
-          input[0].path.endsWith(".agents/skills/wechat-connection/SKILL.md") &&
+          isAbsolute(input[0].path) &&
+          input[0].path.endsWith(connectionSkillPathSuffix) &&
           input[1]?.type === "text" &&
           input[1]?.text === "hello"
         : input[0]?.type === "text" && input[0]?.text === "hello");
@@ -461,7 +471,9 @@ input.on("line", (line) => {
       mode === "validate-bootstrap" &&
       (!Array.isArray(message.params?.extraRoots) ||
         message.params.extraRoots.length !== 1 ||
-        !message.params.extraRoots[0].endsWith("/.agents/skills"))
+        typeof message.params.extraRoots[0] !== "string" ||
+        !isAbsolute(message.params.extraRoots[0]) ||
+        !message.params.extraRoots[0].endsWith(skillRootPathSuffix))
     ) {
       errorResponse(message.id, -32008, "invalid skill extra roots payload");
       return;

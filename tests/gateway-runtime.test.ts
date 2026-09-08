@@ -398,6 +398,23 @@ async function waitFor(
   throw new Error("runtime condition was not reached");
 }
 
+async function waitForReady(
+  harness: RuntimeHarness,
+  operation: Promise<void>,
+): Promise<void> {
+  await Promise.race([
+    waitFor(async () => (await readStatus(harness))?.phase === "ready"),
+    operation.then(
+      () => {
+        throw new Error("gateway runtime completed before reaching ready");
+      },
+      (error: unknown) => {
+        throw error;
+      },
+    ),
+  ]);
+}
+
 function run(harness: RuntimeHarness, signal: AbortSignal): Promise<void> {
   const operation = runGateway(harness.config, harness.hub, signal);
   harness.runs.push(operation);
@@ -526,25 +543,29 @@ describe("gateway runtime integration", () => {
     await expect(secondRun).resolves.toBeUndefined();
   });
 
-  it("refuses to continue or recreate gateway files when the installation directory is removed", async () => {
-    const harness = await createHarness();
-    const signal = new AbortController();
-    harness.controllers.push(signal);
-    const operation = run(harness, signal.signal);
-    await waitFor(async () => (await readStatus(harness))?.phase === "ready");
+  it(
+    "refuses to continue or recreate gateway files when the installation directory is removed",
+    { repeats: 9 },
+    async () => {
+      const harness = await createHarness();
+      const signal = new AbortController();
+      harness.controllers.push(signal);
+      const operation = run(harness, signal.signal);
+      await waitForReady(harness, operation);
 
-    await rm(gatewayPaths(harness.hub).directory, {
-      recursive: true,
-      force: true,
-    });
-    signal.abort();
-    await expect(operation).rejects.toThrow("GATEWAY_CONFIGURATION_REPLACED");
-    await expect(
-      access(gatewayPaths(harness.hub).directory),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
+      await rm(gatewayPaths(harness.hub).directory, {
+        recursive: true,
+        force: true,
+      });
+      signal.abort();
+      await expect(operation).rejects.toThrow("GATEWAY_CONFIGURATION_REPLACED");
+      await expect(
+        access(gatewayPaths(harness.hub).directory),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 
   it("does not create Codex or overwrite the running status when the inbox lease is busy", async () => {
     const harness = await createHarness();

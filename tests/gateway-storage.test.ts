@@ -48,7 +48,7 @@ const config = {
 };
 
 describe("gateway storage", () => {
-  it("writes and reads owner-only JSON atomically", async () => {
+  it("writes and reads JSON atomically", async () => {
     const root = await fixtureRoot();
     const directory = path.join(root, "gateway");
     const file = path.join(directory, "config.json");
@@ -59,10 +59,22 @@ describe("gateway storage", () => {
       config,
     );
     expect(await readFile(file, "utf8")).toBe(`${JSON.stringify(config)}\n`);
-    expect((await lstat(directory)).mode & 0o777).toBe(0o700);
-    expect((await lstat(file)).mode & 0o777).toBe(0o600);
     expect((await readdir(directory)).sort()).toEqual(["config.json"]);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "creates owner-only JSON storage on POSIX",
+    async () => {
+      const root = await fixtureRoot();
+      const directory = path.join(root, "gateway");
+      const file = path.join(directory, "config.json");
+
+      await writeGatewayFile(file, gatewayConfigSchema, config);
+
+      expect((await lstat(directory)).mode & 0o777).toBe(0o700);
+      expect((await lstat(file)).mode & 0o777).toBe(0o600);
+    },
+  );
 
   it("fails closed for malformed JSON and schema-incompatible data", async () => {
     const root = await fixtureRoot();
@@ -81,7 +93,7 @@ describe("gateway storage", () => {
     );
   });
 
-  it("rejects symlinked files and world-readable files or directories", async () => {
+  it("rejects symlinked files", async () => {
     const root = await fixtureRoot();
     const directory = path.join(root, "gateway");
     const file = path.join(directory, "config.json");
@@ -96,19 +108,28 @@ describe("gateway storage", () => {
     await expect(
       writeGatewayFile(file, gatewayConfigSchema, config),
     ).rejects.toThrow("GATEWAY_STORAGE_UNSAFE");
-
-    await rm(file);
-    await writeGatewayFile(file, gatewayConfigSchema, config);
-    await chmod(file, 0o644);
-    await expect(readGatewayFile(file, gatewayConfigSchema)).rejects.toThrow(
-      "GATEWAY_STORAGE_UNSAFE",
-    );
-
-    await chmod(directory, 0o755);
-    await expect(readGatewayFile(file, gatewayConfigSchema)).rejects.toThrow(
-      "GATEWAY_STORAGE_UNSAFE",
-    );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects world-readable files or directories on POSIX",
+    async () => {
+      const root = await fixtureRoot();
+      const directory = path.join(root, "gateway");
+      const file = path.join(directory, "config.json");
+
+      await writeGatewayFile(file, gatewayConfigSchema, config);
+      await chmod(file, 0o644);
+      await expect(readGatewayFile(file, gatewayConfigSchema)).rejects.toThrow(
+        "GATEWAY_STORAGE_UNSAFE",
+      );
+
+      await chmod(file, 0o600);
+      await chmod(directory, 0o755);
+      await expect(readGatewayFile(file, gatewayConfigSchema)).rejects.toThrow(
+        "GATEWAY_STORAGE_UNSAFE",
+      );
+    },
+  );
 
   it("persists pending and handled metadata through JsonGatewayStateStore", async () => {
     const root = await fixtureRoot();
