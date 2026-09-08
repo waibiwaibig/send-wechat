@@ -128,6 +128,78 @@ describe("daemon request router", () => {
     expect(issuePairingInvitation).toHaveBeenCalledOnce();
   });
 
+  it("protects the optional text inbox behind the daemon IPC router", async () => {
+    const poll = vi.fn(() => ({
+      messages: [{ id: "m1", text: "hello", receivedAt: 1 }],
+      overflow: false,
+    }));
+    const ack = vi.fn();
+    const release = vi.fn();
+    const router = new DaemonRequestRouter({
+      runtime: { execute: vi.fn() },
+      login: { login: vi.fn() },
+      withPollingPaused: async (operation) => operation(),
+      doctor: async () => ({ credentialStore: "available" }),
+      issuePairingInvitation: () => "sw1.invitation",
+      inbox: { poll, ack, release },
+    });
+    const context = { emit: vi.fn(), requestVerifyCode: vi.fn() };
+
+    await expect(
+      router.handle(
+        { command: "inbox_poll", requestId: "inbox-1", consumerId: "gateway" },
+        context,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      result: {
+        messages: [{ id: "m1", text: "hello", receivedAt: 1 }],
+        overflow: false,
+      },
+    });
+    await expect(
+      router.handle(
+        {
+          command: "inbox_ack",
+          requestId: "inbox-2",
+          consumerId: "gateway",
+          ids: ["m1"],
+        },
+        context,
+      ),
+    ).resolves.toEqual({ ok: true, result: {} });
+    await expect(
+      router.handle(
+        {
+          command: "inbox_release",
+          requestId: "inbox-3",
+          consumerId: "gateway",
+        },
+        context,
+      ),
+    ).resolves.toEqual({ ok: true, result: {} });
+    expect(poll).toHaveBeenCalledWith("gateway");
+    expect(ack).toHaveBeenCalledWith("gateway", ["m1"]);
+    expect(release).toHaveBeenCalledWith("gateway");
+
+    const unavailable = new DaemonRequestRouter({
+      runtime: { execute: vi.fn() },
+      login: { login: vi.fn() },
+      withPollingPaused: async (operation) => operation(),
+      doctor: async () => ({ credentialStore: "available" }),
+      issuePairingInvitation: () => "sw1.invitation",
+    });
+    await expect(
+      unavailable.handle(
+        { command: "inbox_poll", requestId: "inbox-4", consumerId: "gateway" },
+        context,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "INBOX_UNAVAILABLE", retryable: false },
+    });
+  });
+
   it("holds new sends behind an in-progress login", async () => {
     let finishLogin: (() => void) | undefined;
     const loginGate = new Promise<void>((resolve) => {

@@ -1,4 +1,5 @@
 import type { PollUpdatesResult } from "../ilink/client.js";
+import type { InboundText } from "../messaging/text-inbox.js";
 import type { SendTextCommand } from "./application.js";
 import type { Clock, CredentialStore, StateStore } from "./ports.js";
 
@@ -31,6 +32,10 @@ export type ReminderRuntime = {
   execute(command: SendTextCommand): Promise<unknown>;
 };
 
+export type PollingTextInboxPort = {
+  append(messages: InboundText[]): void;
+};
+
 export type PollingCoordinatorDependencies = {
   stateStore: StateStore;
   credentialStore: CredentialStore;
@@ -39,6 +44,7 @@ export type PollingCoordinatorDependencies = {
   clock: Clock;
   sleep: (milliseconds: number) => Promise<void>;
   random: () => number;
+  inbox?: PollingTextInboxPort;
 };
 
 export type PollOnceResult = {
@@ -106,13 +112,15 @@ export class PollingCoordinator {
     }
 
     this.consecutiveFailures = 0;
-    const inbound = result.inbound
+    const validBoundMessages = result.inbound.filter(
+      (message) =>
+        message.messageType === 1 &&
+        message.fromUserId === state.binding.userId,
+    );
+    const inbound = validBoundMessages
       .filter(
         (message) =>
-          message.messageType === 1 &&
-          message.fromUserId === state.binding.userId &&
-          message.contextToken !== null &&
-          message.contextToken !== "",
+          message.contextToken !== null && message.contextToken !== "",
       )
       .map((message) => ({
         ...message,
@@ -120,6 +128,31 @@ export class PollingCoordinator {
       }))
       .sort((left, right) => left.effectiveTime - right.effectiveTime)
       .at(-1);
+
+    const inboxMessages = validBoundMessages.flatMap((message) => {
+      if (
+        typeof message.id !== "string" ||
+        typeof message.text !== "string" ||
+        !isValidInboundText(message.id, message.text)
+      ) {
+        return [];
+      }
+      return [
+        {
+          id: message.id,
+          text: message.text,
+          receivedAt: this.effectiveInboundTime(message.createTimeMs),
+        },
+      ];
+    });
+    if (this.dependencies.inbox !== undefined && inboxMessages.length > 0) {
+      try {
+        this.dependencies.inbox.append(inboxMessages);
+      } catch {
+        // A broken or busy optional inbox cannot stop cursor advancement,
+        // session renewal, or the existing outbound delivery path.
+      }
+    }
 
     const activatesConnection =
       inbound !== undefined &&
@@ -315,4 +348,15 @@ export class PollingCoordinator {
     }
     return next;
   }
+}
+
+function isValidInboundText(id: string, text: string): boolean {
+  return (
+    id.length > 0 &&
+    id.length <= 256 &&
+    !/[\u0000-\u001f\u007f]/.test(id) &&
+    Array.from(text).length > 0 &&
+    Array.from(text).length <= 4000 &&
+    !/\u0000/.test(text)
+  );
 }

@@ -227,6 +227,52 @@ describe("macOS service manager", () => {
       /launchctl bootstrap failed: bootstrap denied/,
     );
   });
+
+  it("uses a custom label for the complete LaunchAgent lifecycle", async () => {
+    const root = await fixtureRoot();
+    const config = path.join(root, "gateway.plist");
+    const calls: Array<{
+      file: string;
+      args: readonly string[];
+      shell?: boolean;
+    }> = [];
+    const manager = createServiceManager(
+      dependencies("darwin", config, calls, {
+        identity: {
+          label: "io.example.gateway<&",
+          linuxServiceName: "send-wechat-gateway.service",
+          windowsTaskPrefix: "send-wechat-gateway",
+          description: "send-wechat Codex gateway",
+        },
+      }),
+    );
+
+    await manager.install();
+    const definition = await readFile(config, "utf8");
+    expect(definition).toContain(
+      "<string>io.example.gateway&lt;&amp;</string>",
+    );
+    expect(definition).not.toContain(
+      "<string>io.github.waibiwaibig.send-wechat</string>",
+    );
+
+    await manager.status();
+    await manager.start();
+    await manager.stop();
+    await manager.uninstall();
+
+    const targets = calls
+      .filter((call) => call.file === "launchctl")
+      .flatMap((call) => call.args)
+      .filter((argument) => argument.includes("gui/501/"));
+    expect(targets.length).toBeGreaterThan(0);
+    expect(
+      targets.every((target) => target === "gui/501/io.example.gateway<&"),
+    ).toBe(true);
+    expect(targets.some((target) => target.includes("send-wechat"))).toBe(
+      false,
+    );
+  });
 });
 
 describe("Linux service manager", () => {
@@ -395,6 +441,49 @@ describe("Linux service manager", () => {
     );
     await expect(manager.status()).rejects.toThrowError(/UNSUPPORTED_PLATFORM/);
   });
+
+  it("uses a custom service name and description for the complete lifecycle", async () => {
+    const root = await fixtureRoot();
+    const config = path.join(root, "gateway.service");
+    const calls: Array<{
+      file: string;
+      args: readonly string[];
+      shell?: boolean;
+    }> = [];
+    const manager = createServiceManager(
+      dependencies("linux", config, calls, {
+        identity: {
+          label: "io.example.gateway",
+          linuxServiceName: "send-wechat-gateway.service",
+          windowsTaskPrefix: "send-wechat-gateway",
+          description: 'send-wechat "Codex" & gateway %',
+        },
+      }),
+    );
+
+    await manager.install();
+    const definition = await readFile(config, "utf8");
+    expect(definition).toContain(
+      'Description="send-wechat \\\"Codex\\\" & gateway %%"',
+    );
+    expect(definition).not.toContain("Description=send-wechat daemon");
+
+    await manager.status();
+    await manager.start();
+    await manager.stop();
+    await manager.uninstall();
+
+    const serviceArguments = calls
+      .flatMap((call) => call.args)
+      .filter((argument) => argument.endsWith(".service"));
+    expect(serviceArguments.length).toBeGreaterThan(0);
+    expect(
+      serviceArguments.every(
+        (argument) => argument === "send-wechat-gateway.service",
+      ),
+    ).toBe(true);
+    expect(serviceArguments).not.toContain("send-wechat.service");
+  });
 });
 
 describe("Windows service manager", () => {
@@ -547,6 +636,51 @@ describe("Windows service manager", () => {
     ).toBe(false);
   });
 
+  it("uses a custom identity for the complete Windows lifecycle", async () => {
+    const root = await fixtureRoot();
+    const config = path.join(root, "gateway-service.ps1");
+    const calls: Array<{
+      file: string;
+      args: readonly string[];
+      shell?: boolean;
+    }> = [];
+    const manager = createServiceManager(
+      dependencies("win32", config, calls, {
+        identity: {
+          label: "io.example.gateway<&",
+          linuxServiceName: "send-wechat-gateway.service",
+          windowsTaskPrefix: "gateway'$(Invoke-Thing)",
+          description: 'send-wechat "Codex" & gateway %',
+        },
+      }),
+    );
+
+    await manager.install();
+    const definition = await readFile(config, "utf8");
+    expect(definition).toContain(
+      "Register-ScheduledTask -TaskName 'gateway''$(Invoke-Thing)-",
+    );
+    expect(definition).not.toMatch(/-TaskName 'send-wechat-[0-9a-f]{16}'/);
+
+    await manager.status();
+    await manager.start();
+    await manager.stop();
+    await manager.uninstall();
+
+    const commands = calls
+      .map((call) => call.args.at(-1) ?? "")
+      .filter((command) => command.includes("-TaskName"));
+    expect(commands.length).toBeGreaterThan(0);
+    expect(
+      commands.every((command) =>
+        command.includes("gateway''$(Invoke-Thing)-"),
+      ),
+    ).toBe(true);
+    expect(commands.some((command) => command.includes("send-wechat-"))).toBe(
+      false,
+    );
+  });
+
   it("rejects a service manager whose platform and paths disagree", async () => {
     const root = await fixtureRoot();
     const deps = dependencies("darwin", path.join(root, "service.plist"), []);
@@ -556,5 +690,49 @@ describe("Windows service manager", () => {
         platform: "linux",
       }),
     ).toThrowError(/does not match/);
+  });
+
+  it("rejects identity controls and unsafe service names", async () => {
+    const root = await fixtureRoot();
+    const config = path.join(root, "service.plist");
+
+    expect(() =>
+      createServiceManager(
+        dependencies("darwin", config, [], {
+          identity: {
+            label: "gateway\nlabel",
+            linuxServiceName: "gateway.service",
+            windowsTaskPrefix: "gateway",
+            description: "gateway",
+          },
+        }),
+      ),
+    ).toThrowError(/control characters/);
+
+    expect(() =>
+      createServiceManager(
+        dependencies("linux", config, [], {
+          identity: {
+            label: "gateway",
+            linuxServiceName: "..\/gateway.service",
+            windowsTaskPrefix: "gateway",
+            description: "gateway",
+          },
+        }),
+      ),
+    ).toThrowError(/linuxServiceName/);
+
+    expect(() =>
+      createServiceManager(
+        dependencies("win32", config, [], {
+          identity: {
+            label: "gateway",
+            linuxServiceName: "gateway.service",
+            windowsTaskPrefix: "gateway\\child",
+            description: "gateway",
+          },
+        }),
+      ),
+    ).toThrowError(/windowsTaskPrefix/);
   });
 });

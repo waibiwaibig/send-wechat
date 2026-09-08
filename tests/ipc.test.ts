@@ -237,6 +237,41 @@ describe("length-prefixed local IPC interface", () => {
     }
   });
 
+  it("enforces an optional request deadline and leaves the default unbounded", async () => {
+    const paths = await fixture();
+    let release: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = new IpcServer({
+      endpoint: paths.endpoint,
+      tempDir: paths.tempDir,
+      capability: "t".repeat(64),
+      appVersion: "1.2.3",
+      async handle() {
+        await pending;
+        return { ok: true };
+      },
+    });
+    await server.start();
+    try {
+      await expect(
+        requestIpc({
+          endpoint: paths.endpoint,
+          capability: "t".repeat(64),
+          appVersion: "1.2.3",
+          requestId: "deadline",
+          payload: { command: "status" },
+          timeoutMs: 20,
+        }),
+      ).rejects.toMatchObject({ code: "IPC_TIMEOUT" });
+    } finally {
+      release?.();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await server.close();
+    }
+  });
+
   it("rejects a file before streaming when daemon staging capacity is exhausted", async () => {
     const paths = await fixture();
     const sourcePath = join(paths.directory, "five.txt");

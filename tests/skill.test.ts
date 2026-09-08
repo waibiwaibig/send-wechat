@@ -61,7 +61,13 @@ async function linkedMarkdownFiles(): Promise<URL[]> {
     const source = await readFile(sourceUrl, "utf8");
     for (const match of source.matchAll(markdownLinkPattern)) {
       const targetUrl = localMarkdownTarget(sourceUrl, match[1]!);
-      if (targetUrl !== null) pending.push(targetUrl);
+      if (targetUrl !== null) {
+        expect(
+          targetUrl.href.startsWith(skillRootUrl.href),
+          `${sourceUrl.href} -> ${targetUrl.href}`,
+        ).toBe(true);
+        pending.push(targetUrl);
+      }
     }
   }
 
@@ -125,6 +131,9 @@ describe("Agent skill discovery contract", () => {
 
       expect(linkedFiles.map((fileUrl) => fileUrl.href)).toContain(
         new URL("setup.md", skillRootUrl).href,
+      );
+      expect(linkedFiles.map((fileUrl) => fileUrl.href)).toContain(
+        new URL("gateway.md", skillRootUrl).href,
       );
 
       for (const fileUrl of linkedFiles) {

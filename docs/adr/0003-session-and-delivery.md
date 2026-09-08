@@ -5,7 +5,9 @@ Status: accepted
 ## Decision
 
 Only a fresh inbound message from the binding user establishes or renews the
-session window. Inbound content is ignored and never stored. Session states are
+session window. Inbound content is discarded unless a local text-inbox consumer
+has explicitly acquired an active lease; ADR 0007 defines that optional, bounded
+text handoff. Session states are
 `not_logged_in`, `awaiting_message`, `ready`, `renewal_due`, `blocked`, and
 `auth_stale`.
 

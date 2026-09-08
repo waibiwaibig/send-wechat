@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
+import { join } from "node:path";
 
 import { APP_VERSION } from "../app/version.js";
 import { IlinkClient } from "../ilink/client.js";
@@ -24,6 +25,7 @@ import { HubRelayProcessor } from "../relay/protocol.js";
 import { HubRemoteFileUploads } from "../relay/uploads.js";
 import { LoginCoordinator } from "../runtime/login-coordinator.js";
 import { PollingCoordinator } from "../runtime/polling-coordinator.js";
+import { SqliteTextInbox } from "../messaging/text-inbox.js";
 import { JsonAuditLog } from "../storage/audit-log.js";
 import { NativeCredentialStore } from "../storage/credential-store.js";
 import { SqliteIdempotencyStore } from "../storage/idempotency-store.js";
@@ -65,6 +67,7 @@ export async function startProductionDaemon(
   const stateStore = new JsonStateStore(paths.stateFile);
   const credentialStore = new NativeCredentialStore();
   const idempotencyStore = new SqliteIdempotencyStore(paths.idempotencyFile);
+  const inbox = new SqliteTextInbox(join(paths.stateDir, "text-inbox.sqlite"));
   const ilink = new IlinkClient({
     productVersion: APP_VERSION,
     sleep: daemonSleep,
@@ -93,6 +96,7 @@ export async function startProductionDaemon(
     clock: { now: Date.now },
     sleep: daemonSleep,
     random: Math.random,
+    inbox,
   });
   const invitations = new PairingInvitations();
   const router = new DaemonRequestRouter({
@@ -103,6 +107,7 @@ export async function startProductionDaemon(
       if (hubInstallation === null) throw new Error("HUB_NOT_CONFIGURED");
       return invitations.issue(hubInstallation.relayUrl);
     },
+    inbox,
     doctor: async () => {
       let state: "absent" | "valid" | "invalid" = "absent";
       try {
@@ -215,6 +220,7 @@ export async function startProductionDaemon(
       await relayUploads?.close();
       await server.close();
       await pollingTask;
+      inbox.close();
       await rm(paths.tempDir, { recursive: true, force: true });
     },
   };

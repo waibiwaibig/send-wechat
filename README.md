@@ -1,9 +1,11 @@
 # send-wechat
 
-让 Codex、Claude Code 或其他终端 Agent 把文字、文件发到你自己的微信。告诉 Agent：
+让 Codex、Claude Code 或其他终端 Agent 把文字、文件发到你自己的微信，也可以启用
+微信秘书，直接在微信里与固定的 Codex 会话对话。告诉 Agent：
 
 > 请安装并设置 https://github.com/waibiwaibig/send-wechat，并在每台设备上为我使用的
-> Agent 安装用户级全局 send-wechat skill。已有 Hub 就连接它；最后检查 skill、doctor 和 status。
+> Agent 安装用户级全局 send-wechat skill。已有 Hub 就连接它；检查 skill、doctor 和 status。
+> 基础配置完成后，问我是否要启用微信秘书；我同意后再继续配置。
 
 只需要一台常在线的 **Hub** 扫码绑定微信。其他电脑作为客户端，通过你的个人 Cloudflare
 Relay 使用同一个绑定。Hub 负责微信连接；客户端不需要扫码、Cloudflare 账户或后台服务。
@@ -11,7 +13,7 @@ Relay 使用同一个绑定。Hub 负责微信连接；客户端不需要扫码�
 
 ## 安装与全局 skill
 
-Agent 安装 Node.js 24+ 和 [GitHub Release](https://github.com/waibiwaibig/send-wechat/releases/latest)
+Agent 安装 Node.js 24+ 和 [GitHub Release](https://github.com/waibiwaibig/send-wechat/releases)
 中的 `.tgz`，然后复制包内 `.agents/skills/send-wechat/` **整个目录**到 Agent 的用户级目录：
 
 | Agent                                                 | 用户级全局目录                      |
@@ -26,6 +28,7 @@ Agent 安装 Node.js 24+ 和 [GitHub Release](https://github.com/waibiwaibig/sen
 
 Agent 的安装步骤、复制命令和排障见 [setup.md](.agents/skills/send-wechat/setup.md)。
 从源码安装先运行 `npm ci`、`npm run build`、`npm install --global .`。
+预发布阶段从 Releases 列表选择带 `.tgz` 安装包的最新版本；`releases/latest` 不包含预发布。
 
 ## 第一台设备
 
@@ -77,6 +80,27 @@ Hub 的完整 `reset` 会删除云端部署和本机绑定，请仅在需要重�
 `RESULT_UNKNOWN` 表示结果未知，Agent 不得自动重发。工具始终只发给扫码绑定的用户，
 没有收件人选项、群发或多账户。程序调用用全局 `--json`；退出码为 0 成功、2 输入错误、
 3 环境/会话未就绪、4 发送结果需处理、5 本地失败。
+
+## 用微信与 Codex 对话
+
+可选的 `send-wechat-gateway` 是独立后台进程，把你的微信文字交给固定的 Codex CLI
+会话，并把回答逐段发回微信。它不依赖 Codex 桌面应用，也不管理其他工作会话。
+同一个安装包提供发送工具和秘书桥，秘书服务按需启用。Agent 完成基础配置后会询问
+是否启用；同意后，它在现有 Hub 上检查 Codex、引导登录、确定工作目录并启动服务。
+以后也可以直接告诉 Agent：“帮我启用 send-wechat 微信秘书。”
+
+Agent 的完整流程见 [秘书配置指南](.agents/skills/send-wechat/gateway.md)。自行配置时，
+在已经绑定微信、安装并登录 Codex CLI 的 Hub 上运行，`--cwd` 使用你选择的工作目录：
+
+```sh
+send-wechat-gateway setup --cwd /absolute/chosen/directory
+send-wechat-gateway --json status
+```
+
+之后直接给绑定的 bot 发文字即可。新消息会打断当前回复；发送 `/newchat` 切换到空白
+聊天上下文。关闭 gateway 不影响普通的 `send-wechat send` 文本和文件发送。
+安装新版包后先重启 Hub 服务，使它加载入站接口。配置、服务控制和验收边界见
+[gateway 使用说明](docs/gateway.md)。
 
 ## 支持与验证
 

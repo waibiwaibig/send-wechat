@@ -275,6 +275,144 @@ describe("polling coordinator interface", () => {
     expect(deliveries).toEqual([]);
   });
 
+  it("appends every bound-user text while isolating invalid or external updates", async () => {
+    const stateStore = new MemoryStateStore(state());
+    const credentialStore = new MemoryCredentialStore(secret);
+    const appended: unknown[] = [];
+    const coordinator = new PollingCoordinator({
+      stateStore,
+      credentialStore,
+      ilink: {
+        async pollUpdates() {
+          return {
+            status: "ok" as const,
+            cursor: "next-cursor",
+            suggestedTimeoutMs: 27000,
+            inbound: [
+              {
+                messageType: 1,
+                fromUserId: "bound-user",
+                contextToken: "new-context",
+                createTimeMs: now - 2000,
+                id: "first",
+                text: "one",
+              },
+              {
+                messageType: 1,
+                fromUserId: "bound-user",
+                contextToken: null,
+                createTimeMs: now - 1000,
+                id: "second",
+                text: "two",
+              },
+              {
+                messageType: 1,
+                fromUserId: "other-user",
+                contextToken: "other-context",
+                createTimeMs: now - 500,
+                id: "external",
+                text: "do not store",
+              },
+              {
+                messageType: 2,
+                fromUserId: "bound-user",
+                contextToken: "media-context",
+                createTimeMs: now - 400,
+                id: "media",
+                text: "do not store",
+              },
+              {
+                messageType: 1,
+                fromUserId: "bound-user",
+                contextToken: "new-context",
+                createTimeMs: now - 300,
+                id: "invalid-text",
+              },
+            ],
+          };
+        },
+        async notifyLifecycle() {},
+      },
+      inbox: {
+        append(messages) {
+          appended.push(messages);
+        },
+      },
+      runtime: {
+        isDeliveryIdle: () => true,
+        async execute() {
+          return {};
+        },
+      },
+      clock: { now: () => now },
+      sleep: async () => {},
+      random: () => 0.5,
+    });
+
+    await expect(coordinator.pollOnce()).resolves.toEqual({
+      status: "ok",
+      nextDelayMs: 0,
+    });
+    expect(appended).toEqual([
+      [
+        { id: "first", text: "one", receivedAt: now - 2000 },
+        { id: "second", text: "two", receivedAt: now - 1000 },
+      ],
+    ]);
+    expect(stateStore.state?.pollCursor).toBe("next-cursor");
+    expect(stateStore.state?.lastInboundAt).toBe(now - 300);
+  });
+
+  it("continues cursor and session updates when the optional inbox fails", async () => {
+    const stateStore = new MemoryStateStore(state());
+    const credentialStore = new MemoryCredentialStore(secret);
+    const coordinator = new PollingCoordinator({
+      stateStore,
+      credentialStore,
+      ilink: {
+        async pollUpdates() {
+          return {
+            status: "ok" as const,
+            cursor: "after-inbox-error",
+            suggestedTimeoutMs: 27000,
+            inbound: [
+              {
+                messageType: 1,
+                fromUserId: "bound-user",
+                contextToken: "new-context",
+                createTimeMs: now,
+                id: "message",
+                text: "hello",
+              },
+            ],
+          };
+        },
+        async notifyLifecycle() {},
+      },
+      inbox: {
+        append() {
+          throw new Error("inbox unavailable");
+        },
+      },
+      runtime: {
+        isDeliveryIdle: () => true,
+        async execute() {
+          return {};
+        },
+      },
+      clock: { now: () => now },
+      sleep: async () => {},
+      random: () => 0.5,
+    });
+
+    await expect(coordinator.pollOnce()).resolves.toEqual({
+      status: "ok",
+      nextDelayMs: 0,
+    });
+    expect(stateStore.state?.pollCursor).toBe("after-inbox-error");
+    expect(credentialStore.secret?.contextToken).toBe("new-context");
+  });
+
   it("marks stale authentication and stops treating the session as ready", async () => {
     const stateStore = new MemoryStateStore(state(now - 60_000));
     const coordinator = new PollingCoordinator({

@@ -1,6 +1,6 @@
 ---
 name: send-wechat
-description: Send WeChat/Weixin messages or files when the user asks to 发微信, or install, set up, pair, or diagnose send-wechat.
+description: Send WeChat/Weixin messages or files when the user asks to 发微信, install, pair, or diagnose send-wechat, or set up its Codex 微信秘书 gateway.
 ---
 
 # send-wechat
@@ -30,6 +30,9 @@ Read [setup.md](setup.md) only for these tasks. Complete routine installation
 and fixes yourself; pause for browser authorization, QR/verification, the first
 inbound activation message, passwords, or a required device choice.
 
+After the requested installation or pairing is ready, follow setup.md's optional
+secretary offer once. Ordinary sends and recovery alone do not trigger that offer.
+
 On **every device, including the Hub and each client/WSL environment**, install
 both the CLI and this entire skill directory into each Agent's user-level
 (global) skills directory. Tell the user this is required so their Agent can
@@ -40,3 +43,11 @@ Pair through SSH or let the user paste a short-lived code into `setup --pair`.
 Keep long-lived credentials, passwords, and device keys out of Agent output.
 Pairing codes belong only in the chosen transfer channel; do not echo them into
 reports or logs. Reset requires an explicit request and its terminal confirmation.
+
+## Optional WeChat secretary
+
+For an explicit request to enable, configure, stop, or diagnose the Codex secretary,
+read [gateway.md](gateway.md). It runs on the existing Hub, consumes bound-user
+text, and bridges one Codex CLI conversation. It shares the installed package with
+the sending CLI; enabling its background service is a separate user choice.
+Reuse prior consent, and preserve an already configured secretary and its thread.

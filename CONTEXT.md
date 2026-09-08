@@ -6,6 +6,10 @@
 text message or one file to the Weixin user who explicitly bound the tool by
 scanning its QR code. It is not a general Weixin client or an OpenClaw plugin.
 
+The optional `send-wechat-gateway` executable connects this transport to one
+fixed Codex CLI conversation. It runs in a separate background process and
+does not manage Codex's other work sessions. See ADR 0007 and `docs/gateway.md`.
+
 ## Domain vocabulary
 
 - **binding**: the immutable relationship between the current operating-system
@@ -86,6 +90,20 @@ credential file so SSH/WSL sessions do not depend on Keychain or Secret Service.
 The file contains only the remote client's own relay credential. Windows clients
 use native storage. There is no process-environment credential source or
 role-crossing fallback.
+
+### Optional text inbox and Codex gateway
+
+The Hub's authenticated local text inbox is a generic transport seam. An active
+exclusive consumer lease enables collection of bound-user text; bounded storage
+supports acknowledgement and duplicate suppression. Inbox failure is isolated
+from ordinary session renewal and outbound sends. Relay clients do not consume
+this inbox.
+
+The independent gateway maps inbox text to one Codex app-server thread, maps
+visible reply events to bounded Weixin blocks, and handles `/newchat`. It stores
+its own current thread pointer and input-handoff metadata. Codex retains all
+conversation history and execution capabilities. Distinct platform service
+identities allow the gateway and the base Hub to run and stop independently.
 
 ## Trust model
 

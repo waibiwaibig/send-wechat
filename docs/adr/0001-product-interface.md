@@ -41,6 +41,10 @@ project-operated relay, public library interface, router configuration, or LAN
 listener. The user-owned relay transport is an internal interface and does not
 turn the CLI into a general Weixin HTTP endpoint.
 
+ADR 0007 adds the optional `send-wechat-gateway` executable. It has its own
+configuration and background service and consumes a generic authenticated local
+text inbox. The existing `send-wechat` command set remains independent of Codex.
+
 ## Consequences
 
 Programs receive the same stable JSON and exit-code contracts on a Hub or a

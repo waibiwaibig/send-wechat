@@ -317,6 +317,7 @@ describe("iLink module interface", () => {
             {
               message_type: 1,
               from_user_id: "user-id",
+              message_id: 42,
               context_token: "new-context",
               create_time_ms: 1787558400000,
               item_list: [{ type: 1, text_item: { text: "must be ignored" } }],
@@ -344,6 +345,8 @@ describe("iLink module interface", () => {
           fromUserId: "user-id",
           contextToken: "new-context",
           createTimeMs: 1787558400000,
+          id: "f03d8e5229a3f66dca42a92982e8d1b104e22163d07d542b5c4442b0c7807297",
+          text: "must be ignored",
         },
       ],
     });
@@ -415,6 +418,95 @@ describe("iLink module interface", () => {
         cursor: "durable-cursor",
       }),
     ).resolves.toMatchObject({ status: "ok", cursor: "durable-cursor" });
+  });
+
+  it("keeps session metadata for malformed IDs while extracting bounded text items", async () => {
+    const client = new IlinkClient({
+      productVersion: "0.1.0",
+      fetch: async () =>
+        response({
+          ret: 0,
+          msgs: [
+            {
+              message_type: 1,
+              from_user_id: "user-id",
+              message_id: { unexpected: true },
+              context_token: "context-1",
+              create_time_ms: 1787558400000,
+              item_list: [
+                { type: 2, image_item: { media: "ignored" } },
+                { type: 1, text_item: { text: "one" } },
+                { type: 1, text_item: { text: "two" } },
+              ],
+            },
+            {
+              message_type: 1,
+              from_user_id: "user-id",
+              message_id: "x".repeat(257),
+              context_token: "context-2",
+              create_time_ms: 1787558400001,
+              item_list: [{ type: 1, text_item: { text: "fallback" } }],
+            },
+            {
+              message_type: 1,
+              from_user_id: "user-id",
+              message_id: Number.MAX_SAFE_INTEGER + 1,
+              context_token: "context-3",
+              create_time_ms: 1787558400002,
+              item_list: [{ type: 1, text_item: { text: "x".repeat(4001) } }],
+            },
+            {
+              message_type: 1,
+              from_user_id: "user-id",
+              message_id: 43,
+              context_token: "context-4",
+              create_time_ms: 1787558400003,
+              item_list: Array.from({ length: 1001 }, () => ({
+                type: 1,
+                text_item: { text: "ignored" },
+              })),
+            },
+          ],
+        }),
+    });
+
+    const result = await client.pollUpdates({
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      botToken: "bot-token",
+      cursor: "cursor",
+    });
+    expect(result).toMatchObject({
+      status: "ok",
+      inbound: [
+        {
+          messageType: 1,
+          fromUserId: "user-id",
+          contextToken: "context-1",
+          text: "onetwo",
+        },
+        {
+          messageType: 1,
+          fromUserId: "user-id",
+          contextToken: "context-2",
+          text: "fallback",
+        },
+        {
+          messageType: 1,
+          fromUserId: "user-id",
+          contextToken: "context-3",
+        },
+        {
+          messageType: 1,
+          fromUserId: "user-id",
+          contextToken: "context-4",
+        },
+      ],
+    });
+    if (result.status !== "ok") throw new Error("unexpected poll result");
+    expect(result.inbound[0]?.id).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.inbound[1]?.id).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.inbound[2]?.id).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.inbound[3]?.id).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("accepts the upstream empty update shape when optional result codes are omitted", async () => {

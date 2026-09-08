@@ -64,6 +64,8 @@ export type PollUpdatesResult =
         fromUserId: string;
         contextToken: string | null;
         createTimeMs: number | null;
+        id?: string;
+        text?: string;
       }>;
     }
   | { status: "auth_stale" }
@@ -131,11 +133,13 @@ const updatesResponseSchema = z.object({
       z.object({
         message_type: z.number().int().optional().default(0),
         from_user_id: z.string().max(4096).optional().default(""),
+        message_id: z.unknown().optional(),
         context_token: z
           .string()
           .max(64 * 1024)
           .optional(),
         create_time_ms: z.number().int().optional(),
+        item_list: z.unknown().optional(),
       }),
     )
     .max(1000)
@@ -528,12 +532,23 @@ export class IlinkClient implements IlinkPort {
           ? params.cursor
           : parsed.data.get_updates_buf,
       suggestedTimeoutMs: this.longPollTimeoutMs,
-      inbound: parsed.data.msgs.map((message) => ({
-        messageType: message.message_type,
-        fromUserId: message.from_user_id,
-        contextToken: message.context_token ?? null,
-        createTimeMs: message.create_time_ms ?? null,
-      })),
+      inbound: parsed.data.msgs.map((message) => {
+        const text = extractInboundText(message.item_list);
+        const id = inboundMessageId(
+          message.message_id,
+          message.from_user_id,
+          message.create_time_ms ?? null,
+          text,
+        );
+        return {
+          messageType: message.message_type,
+          fromUserId: message.from_user_id,
+          contextToken: message.context_token ?? null,
+          createTimeMs: message.create_time_ms ?? null,
+          ...(id === undefined ? {} : { id }),
+          ...(text === undefined ? {} : { text }),
+        };
+      }),
     };
   }
 
@@ -788,4 +803,52 @@ function isTimeoutError(error: unknown): boolean {
       (error.name === "AbortError" &&
         /tim(?:e|ed)[ -]?out/i.test(error.message)))
   );
+}
+
+function inboundMessageId(
+  messageId: unknown,
+  fromUserId: string,
+  createTimeMs: number | null,
+  text: string | undefined,
+): string {
+  const numericId =
+    typeof messageId === "number" &&
+    Number.isSafeInteger(messageId) &&
+    messageId >= 0
+      ? String(messageId)
+      : null;
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        numericId === null
+          ? { fromUserId, createTimeMs, text: text ?? null }
+          : { fromUserId, messageId: numericId },
+      ),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+function extractInboundText(itemList: unknown): string | undefined {
+  if (!Array.isArray(itemList)) return undefined;
+  const items = itemList as unknown[];
+  if (items.length > 1000) return undefined;
+  const segments: string[] = [];
+  let length = 0;
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item === null || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    if (record.type !== 1) continue;
+    const textItem = record.text_item;
+    if (textItem === null || typeof textItem !== "object") continue;
+    const text = (textItem as Record<string, unknown>).text;
+    if (typeof text !== "string") continue;
+    const segmentLength = Array.from(text).length;
+    if (segmentLength === 0 || /\u0000/.test(text)) continue;
+    length += segmentLength;
+    if (length > 4000) return undefined;
+    segments.push(text);
+  }
+  return segments.length === 0 ? undefined : segments.join("");
 }

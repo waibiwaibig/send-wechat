@@ -20,11 +20,13 @@
   "type": "module",
   "exports": {},
   "bin": {
-    "send-wechat": "dist/cli/bin.js"
+    "send-wechat": "dist/cli/bin.js",
+    "send-wechat-gateway": "dist/gateway/bin.js"
   },
   "files": [
     "dist",
     "README.md",
+    "docs/gateway.md",
     "SECURITY.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",

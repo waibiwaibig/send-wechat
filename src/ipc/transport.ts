@@ -55,6 +55,24 @@ const sendFilePayloadSchema = z.strictObject({
     ),
   byteLength: z.number().int().positive().max(MAX_FILE_BYTES),
 });
+const consumerIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .refine((value) => !/[\u0000-\u001f\u007f]/.test(value));
+const inboxPollPayloadSchema = z.strictObject({
+  command: z.literal("inbox_poll"),
+  consumerId: consumerIdSchema,
+});
+const inboxAckPayloadSchema = z.strictObject({
+  command: z.literal("inbox_ack"),
+  consumerId: consumerIdSchema,
+  ids: z.array(z.string().min(1).max(256)).max(500),
+});
+const inboxReleasePayloadSchema = z.strictObject({
+  command: z.literal("inbox_release"),
+  consumerId: consumerIdSchema,
+});
 
 const payloadSchema = z.discriminatedUnion("command", [
   statusPayloadSchema,
@@ -64,6 +82,9 @@ const payloadSchema = z.discriminatedUnion("command", [
   resetPayloadSchema,
   sendTextPayloadSchema,
   sendFilePayloadSchema,
+  inboxPollPayloadSchema,
+  inboxAckPayloadSchema,
+  inboxReleasePayloadSchema,
 ]);
 
 const requestEnvelopeSchema = z.strictObject({
@@ -172,6 +193,7 @@ export type RequestIpcOptions = {
   appVersion: string;
   requestId: string;
   payload: IpcClientPayload;
+  timeoutMs?: number;
   filePath?: string;
   onEvent?(event: IpcEvent): Promise<void> | void;
   onVerifyCode?(): Promise<string | null>;
@@ -622,7 +644,28 @@ export async function requestIpc(options: RequestIpcOptions): Promise<unknown> {
 
   const socket = await connect(options.endpoint);
   const reader = new SocketReader(socket);
-  try {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  let deadlinePromise: Promise<never> | null = null;
+  if (options.timeoutMs !== undefined) {
+    if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) {
+      socket.destroy();
+      throw new IpcTransportError(
+        "IPC_TIMEOUT_INVALID",
+        "The IPC timeout is invalid.",
+      );
+    }
+    deadlinePromise = new Promise<never>((_resolve, reject) => {
+      deadline = setTimeout(() => {
+        const error = new IpcTransportError(
+          "IPC_TIMEOUT",
+          "The IPC request exceeded its deadline.",
+        );
+        socket.destroy(error);
+        reject(error);
+      }, options.timeoutMs);
+    });
+  }
+  const requestWork = async (): Promise<unknown> => {
     await writeFrame(socket, {
       kind: "request",
       schemaVersion: SCHEMA_VERSION,
@@ -729,7 +772,13 @@ export async function requestIpc(options: RequestIpcOptions): Promise<unknown> {
         "The IPC peer sent an invalid frame.",
       );
     }
+  };
+  try {
+    return await (deadlinePromise === null
+      ? requestWork()
+      : Promise.race([requestWork(), deadlinePromise]));
   } finally {
+    if (deadline !== undefined) clearTimeout(deadline);
     socket.destroy();
   }
 }

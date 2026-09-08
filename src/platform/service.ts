@@ -23,12 +23,23 @@ import {
   type SupportedPlatform,
 } from "./paths.js";
 
-const SERVICE_LABEL = "io.github.waibiwaibig.send-wechat";
-const LINUX_SERVICE_NAME = "send-wechat.service";
+const DEFAULT_SERVICE_IDENTITY = {
+  label: "io.github.waibiwaibig.send-wechat",
+  linuxServiceName: "send-wechat.service",
+  windowsTaskPrefix: "send-wechat",
+  description: "send-wechat daemon",
+} as const;
 
 export type ServiceStatus = {
   installed: boolean;
   running: boolean;
+};
+
+export type ServiceIdentity = {
+  readonly label: string;
+  readonly linuxServiceName: string;
+  readonly windowsTaskPrefix: string;
+  readonly description: string;
 };
 
 export interface ServiceManager {
@@ -47,10 +58,68 @@ export type ServiceManagerDependencies = {
   readonly cliEntry: string;
   readonly uid: string | number;
   readonly username: string;
+  readonly identity?: ServiceIdentity;
   readonly commandRunner?: CommandRunnerLike;
   readonly runCommand?: CommandRunnerLike;
   readonly runner?: CommandRunnerLike;
 };
+
+function hasIdentityControlCharacter(value: string): boolean {
+  return /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value);
+}
+
+function assertIdentityField(
+  identity: Record<string, unknown>,
+  field: keyof ServiceIdentity,
+): string {
+  const value = identity[field];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`identity.${field} must be a non-empty string`);
+  }
+  if (hasIdentityControlCharacter(value)) {
+    throw new TypeError(
+      `identity.${field} must not contain control characters`,
+    );
+  }
+  return value;
+}
+
+function normalizeServiceIdentity(
+  configured: ServiceIdentity | undefined,
+): ServiceIdentity {
+  const candidate = configured ?? DEFAULT_SERVICE_IDENTITY;
+  const identity = candidate as unknown as Record<string, unknown>;
+  const label = assertIdentityField(identity, "label");
+  const linuxServiceName = assertIdentityField(identity, "linuxServiceName");
+  const windowsTaskPrefix = assertIdentityField(identity, "windowsTaskPrefix");
+  const description = assertIdentityField(identity, "description");
+
+  if (label.trim() !== label || /[\s\\/]/u.test(label)) {
+    throw new TypeError(
+      "identity.label must be a single launchd service name without whitespace or path separators",
+    );
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*\.service$/u.test(linuxServiceName)) {
+    throw new TypeError(
+      "identity.linuxServiceName must be a concrete systemd .service name",
+    );
+  }
+  if (
+    windowsTaskPrefix.trim() !== windowsTaskPrefix ||
+    windowsTaskPrefix.includes("\\")
+  ) {
+    throw new TypeError(
+      "identity.windowsTaskPrefix must be a scheduled task name prefix without path separators",
+    );
+  }
+  if (description.trim().length === 0) {
+    throw new TypeError(
+      "identity.description must contain a visible character",
+    );
+  }
+
+  return { label, linuxServiceName, windowsTaskPrefix, description };
+}
 
 type CommandFailure = Error & {
   readonly code?: string | number;
@@ -175,6 +244,7 @@ function xmlEscape(value: string): string {
 function launchAgentDefinition(
   nodeExecutable: string,
   cliEntry: string,
+  label: string,
 ): string {
   const argumentsXml = [nodeExecutable, cliEntry, "internal-daemon"]
     .map((argument) => `\t\t\t<string>${xmlEscape(argument)}</string>`)
@@ -185,7 +255,7 @@ function launchAgentDefinition(
     '<plist version="1.0">',
     "<dict>",
     "\t<key>Label</key>",
-    `\t<string>${SERVICE_LABEL}</string>`,
+    `\t<string>${xmlEscape(label)}</string>`,
     "\t<key>ProgramArguments</key>",
     "\t<array>",
     argumentsXml,
@@ -222,10 +292,11 @@ function systemdEscape(value: string): string {
 function systemdUnitDefinition(
   nodeExecutable: string,
   cliEntry: string,
+  description: string,
 ): string {
   return [
     "[Unit]",
-    "Description=send-wechat daemon",
+    `Description=${/[\\%"]/u.test(description) ? systemdEscape(description) : description}`,
     "",
     "[Service]",
     `ExecStart=${[nodeExecutable, cliEntry].map(systemdEscape).join(" ")} internal-daemon`,
@@ -312,13 +383,14 @@ function createManager(
       `service platform ${platform} does not match paths ${paths.platform}`,
     );
   }
+  const identity = normalizeServiceIdentity(dependencies.identity);
   const runner =
     dependencies.commandRunner ??
     dependencies.runCommand ??
     dependencies.runner ??
     defaultCommandRunner;
-  const launchTarget = `gui/${String(uid)}/${SERVICE_LABEL}`;
-  const windowsTaskName = `send-wechat-${createHash("sha256")
+  const launchTarget = `gui/${String(uid)}/${identity.label}`;
+  const windowsTaskName = `${identity.windowsTaskPrefix}-${createHash("sha256")
     .update(
       `${username.toLowerCase()}\0${path.win32.resolve(paths.stateDir).toLowerCase()}`,
       "utf8",
@@ -341,7 +413,7 @@ function createManager(
       const enabled = await runCommand(runner, platform, "systemctl", [
         "--user",
         "is-enabled",
-        LINUX_SERVICE_NAME,
+        identity.linuxServiceName,
       ]);
       if (enabled.exitCode !== 0 && isUnavailable(enabled)) {
         throw new UnsupportedPlatformError(
@@ -354,7 +426,7 @@ function createManager(
       const active = await runCommand(runner, platform, "systemctl", [
         "--user",
         "is-active",
-        LINUX_SERVICE_NAME,
+        identity.linuxServiceName,
       ]);
       if (active.exitCode !== 0 && isUnavailable(active)) {
         throw new UnsupportedPlatformError(
@@ -382,7 +454,7 @@ function createManager(
     if (platform === "darwin") {
       await writeOwnerConfig(
         paths.serviceConfigPath,
-        launchAgentDefinition(nodeExecutable, cliEntry),
+        launchAgentDefinition(nodeExecutable, cliEntry, identity.label),
       );
       return;
     }
@@ -390,7 +462,7 @@ function createManager(
     if (platform === "linux") {
       await writeOwnerConfig(
         paths.serviceConfigPath,
-        systemdUnitDefinition(nodeExecutable, cliEntry),
+        systemdUnitDefinition(nodeExecutable, cliEntry, identity.description),
       );
       const reload = await runCommand(runner, platform, "systemctl", [
         "--user",
@@ -404,7 +476,7 @@ function createManager(
       const enable = await runCommand(runner, platform, "systemctl", [
         "--user",
         "enable",
-        LINUX_SERVICE_NAME,
+        identity.linuxServiceName,
       ]);
       assertCommandSucceeded(platform, "systemctl --user enable", enable);
       return;
@@ -456,7 +528,7 @@ function createManager(
       const result = await runCommand(runner, platform, "systemctl", [
         "--user",
         "start",
-        LINUX_SERVICE_NAME,
+        identity.linuxServiceName,
       ]);
       assertCommandSucceeded(platform, "systemctl --user start", result);
     } else {
@@ -490,7 +562,7 @@ function createManager(
       const result = await runCommand(runner, platform, "systemctl", [
         "--user",
         "stop",
-        LINUX_SERVICE_NAME,
+        identity.linuxServiceName,
       ]);
       assertCommandSucceeded(platform, "systemctl --user stop", result);
     } else {
@@ -536,7 +608,7 @@ function createManager(
       const result = await runCommand(runner, platform, "systemctl", [
         "--user",
         "restart",
-        LINUX_SERVICE_NAME,
+        identity.linuxServiceName,
       ]);
       assertCommandSucceeded(platform, "systemctl --user restart", result);
     } else {
@@ -578,7 +650,7 @@ function createManager(
         "--user",
         "disable",
         "--now",
-        LINUX_SERVICE_NAME,
+        identity.linuxServiceName,
       ]);
       assertCommandSucceeded(platform, "systemctl --user disable", disable);
       await removeConfig(paths.serviceConfigPath);

@@ -7,6 +7,7 @@ import type {
   IpcConnectionContext,
   IpcServerRequest,
 } from "../ipc/transport.js";
+import type { TextInboxPollResult } from "../messaging/text-inbox.js";
 
 type RuntimeLike = {
   execute(command: RuntimeCommand): Promise<unknown>;
@@ -16,12 +17,19 @@ type LoginLike = {
   login(interaction: LoginInteraction): Promise<LoginResult>;
 };
 
+type TextInboxLike = {
+  poll(consumerId: string): TextInboxPollResult;
+  ack(consumerId: string, ids: string[]): void;
+  release(consumerId: string): void;
+};
+
 export type DaemonRequestRouterDependencies = {
   runtime: RuntimeLike;
   login: LoginLike;
   doctor(): Promise<unknown>;
   issuePairingInvitation(): string;
   withPollingPaused<T>(operation: () => Promise<T>): Promise<T>;
+  inbox?: TextInboxLike;
 };
 
 export class DaemonRequestRouter {
@@ -80,11 +88,61 @@ export class DaemonRequestRouter {
             invitation: this.dependencies.issuePairingInvitation(),
           },
         };
+      case "inbox_poll":
+        return this.handleInbox(() =>
+          this.requireInbox().poll(request.consumerId),
+        );
+      case "inbox_ack":
+        return this.handleInbox(() => {
+          this.requireInbox().ack(request.consumerId, request.ids);
+          return {};
+        });
+      case "inbox_release":
+        return this.handleInbox(() => {
+          this.requireInbox().release(request.consumerId);
+          return {};
+        });
       case "reset":
         return {
           ok: false,
           error: { code: "RESET_REQUIRES_STOPPED_DAEMON", retryable: false },
         };
+    }
+  }
+
+  private requireInbox(): TextInboxLike {
+    if (this.dependencies.inbox === undefined)
+      throw new Error("INBOX_UNAVAILABLE");
+    return this.dependencies.inbox;
+  }
+
+  private handleInbox(operation: () => unknown):
+    | {
+        ok: true;
+        result: unknown;
+      }
+    | {
+        ok: false;
+        error: { code: string; retryable: boolean };
+      } {
+    try {
+      return { ok: true, result: operation() };
+    } catch (error) {
+      const code =
+        error !== null &&
+        typeof error === "object" &&
+        "code" in error &&
+        typeof error.code === "string" &&
+        /^INBOX_[A-Z_]+$/.test(error.code)
+          ? error.code
+          : "INBOX_UNAVAILABLE";
+      return {
+        ok: false,
+        error: {
+          code,
+          retryable: code === "INBOX_BUSY",
+        },
+      };
     }
   }
 

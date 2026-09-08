@@ -11,15 +11,20 @@ describe("release version", () => {
     ) as {
       version: string;
       bin: Record<string, string>;
+      files: string[];
     };
     expect(APP_VERSION).toBe(packageJson.version);
-    expect(packageJson.bin).toEqual({ "send-wechat": "dist/cli/bin.js" });
+    expect(packageJson.bin).toStrictEqual({
+      "send-wechat": "dist/cli/bin.js",
+      "send-wechat-gateway": "dist/gateway/bin.js",
+    });
+    expect(packageJson.files).toContain("docs/gateway.md");
 
     const packageLock = JSON.parse(
       await readFile(new URL("../package-lock.json", import.meta.url), "utf8"),
     ) as {
       packages: Record<string, { bin?: Record<string, string> }>;
     };
-    expect(packageLock.packages[""]?.bin).toEqual(packageJson.bin);
+    expect(packageLock.packages[""]?.bin).toStrictEqual(packageJson.bin);
   });
 });
