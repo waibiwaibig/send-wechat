@@ -279,8 +279,9 @@ export function localizedMessage(
       en: "The login credentials are stale.",
     },
     SESSION_EXPIRED: {
-      "zh-CN": "blocked: 微信会话已过期，请先给 ClawBot 发一条消息。",
-      en: "blocked: the Weixin session expired; send a message to ClawBot first.",
+      "zh-CN":
+        "blocked: 微信会话已过期，请先给 ClawBot 单独发送 /recover 续期。",
+      en: "blocked: the Weixin session expired; send /recover to ClawBot first.",
     },
     SERVER_REJECTED: {
       "zh-CN": "发送被 Weixin 拒绝。",

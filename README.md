@@ -101,7 +101,10 @@ send-wechat-gateway --json status
 发送 `/` 查看命令，`/model astra low` 选择模型和推理强度。秘书默认完全访问；
 发送 `/permission` 查看模式，用 `/permission workspace` 或 `/permission read-only`
 限制后续执行。`/stream off` 关闭逐段发送，`/stream on` 开启，下一次回复生效。
-新消息会打断当前回复；`/newchat` 切换到空白聊天上下文，同时提醒
+单独发送 `/recover` 可续期微信发送会话，由 Hub 处理，不触发或打断 Codex。
+会话按最后一次有效入站消息滚动计时 24 小时，第 23 小时起尝试提醒一次；
+轮询延迟、断网或发送队列繁忙可能导致提醒延后或未发出。
+普通新消息会打断当前回复；`/newchat` 切换到空白聊天上下文，同时提醒
 保留的模型、权限与流式状态。关闭 gateway 不影响普通的 `send-wechat send` 文本和文件发送。
 安装新版包后先重启 Hub 服务，使它加载入站接口。配置、服务控制和验收边界见
 [gateway 使用说明](docs/gateway.md)。

@@ -40,7 +40,10 @@ limit. Longer messages remain bounded blocks; completed commentary and final
 messages keep separate boundaries. Out-of-band notices do not flush unfinished
 assistant content. Selections persist across restart and newchat; every newchat
 reports model, effort, permission and stream mode.
-Unknown commands stay in the gateway and return help.
+The Hub consumes standalone `/recover` before inbox handoff, independently of
+gateway availability. It renews the Weixin transport session without changing
+the Codex thread or interrupting a turn. Unknown commands reaching the gateway
+stay in the gateway and return help.
 
 The first turn of each newly created thread supplies the packaged
 `wechat-connection` skill as a separate native skill input. User text remains

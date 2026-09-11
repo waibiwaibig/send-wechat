@@ -28,6 +28,7 @@ export function parseGatewayCommand(text: string): GatewayCommand | null {
 export const COMMAND_HELP = [
   "微信秘书命令（发送后生效）：",
   "/ 或 /help：查看命令",
+  "/recover：续期微信发送会话，不触发或打断 Codex",
   "/model：当前模型、可选模型与推理强度",
   "/model astra low：选择模型与推理强度",
   "/permission：查看和选择权限模式",

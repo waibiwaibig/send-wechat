@@ -100,8 +100,9 @@ send-wechat --json send --text 'send-wechat acceptance' --idempotency-key accept
 
 ## 会话、reset 与失败边界
 
-1. 在真实窗口观察第 22 小时后的 `renewal_due`；不回复直到 24 小时后，发送应 fail
-   closed。绑定用户再发一条入站消息后恢复 `ready`。
+1. 在真实窗口观察第 23 小时后的 `renewal_due`；不回复直到 24 小时后，发送应 fail
+   closed。绑定用户单独发送 `/recover` 后恢复 `ready` 并收到一条续期确认；
+   分别在秘书运行、正在回复和关闭时验证，确认没有新 Codex 轮次、没有打断当前回复。
 2. 远端执行 `reset`：确认只清除该设备本机状态，不删除 Worker、不停止 Hub。该操作
    不撤销 Hub 端授权；已复制到别处的旧 device key 仍需通过 Hub 整体 reset 才失效。
 3. Hub 执行 `reset` 前先测试取消，取消不得改变状态。正式输入 `RESET` 后确认 Worker
@@ -118,7 +119,7 @@ headless GNU/Linux 只执行远端客户端流程，确认没有 Secret Service�
 或图形会话时仍可配对、status、doctor、发送与 reset。Alpine/musl、32 位和 FreeBSD
 不进入支持矩阵。
 
-| 平台/角色                        | setup/OAuth/QR | Relay/重连 | 文本/文件/去重 | 22h/24h | reset | 日期与脱敏证据 |
+| 平台/角色                        | setup/OAuth/QR | Relay/重连 | 文本/文件/去重 | 23h/24h | reset | 日期与脱敏证据 |
 | -------------------------------- | -------------- | ---------- | -------------- | ------- | ----- | -------------- |
 | macOS Hub                        | [ ]            | [ ]        | [ ]            | [ ]     | [ ]   |                |
 | 独立 macOS 用户或第二设备 Client | [ ]            | [ ]        | [ ]            | N/A     | [ ]   |                |

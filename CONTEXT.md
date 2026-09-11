@@ -36,7 +36,7 @@ does not manage Codex's other work sessions. See ADR 0007 and `docs/gateway.md`.
 - **connection confirmation**: one best-effort outbound acknowledgement when a
   valid inbound message first moves one binding activation from
   `awaiting_message` to `ready`. Ordinary session renewals do not trigger it.
-- **renewal due**: the interval from hour 22 until hour 24 of a session window.
+- **renewal due**: the interval from hour 23 until hour 24 of a session window.
 - **accepted**: the Weixin `sendmessage` endpoint returned HTTP success and a
   zero business result. It does not mean delivered or read.
 - **result unknown**: a send request began but no authoritative business result

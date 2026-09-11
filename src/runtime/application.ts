@@ -2,9 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { IlinkSendRequest, RuntimeDependencies } from "./ports.js";
 import type { IdempotencyEntry } from "./state.js";
+import {
+  SESSION_BLOCK_AFTER_MS,
+  SESSION_RENEWAL_AFTER_MS,
+} from "./session-policy.js";
 
-const RENEWAL_AFTER_MS = 22 * 60 * 60 * 1000;
-const BLOCK_AFTER_MS = 24 * 60 * 60 * 1000;
 const IDEMPOTENCY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_TEXT_CODE_POINTS = 4000;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
@@ -24,7 +26,7 @@ export type SendTextCommand = {
   requestId: string;
   idempotencyKey: string;
   text: string;
-  purpose?: "user" | "reminder" | "connection";
+  purpose?: "user" | "reminder" | "connection" | "recovery";
 };
 export type SendFileCommand = {
   type: "send-file";
@@ -118,9 +120,9 @@ export class RuntimeApplication {
       this.dependencies.clock.now() - persisted.lastInboundAt,
     );
     const state: SessionState =
-      age >= BLOCK_AFTER_MS
+      age >= SESSION_BLOCK_AFTER_MS
         ? "blocked"
-        : age >= RENEWAL_AFTER_MS
+        : age >= SESSION_RENEWAL_AFTER_MS
           ? "renewal_due"
           : "ready";
     return this.statusResult(
@@ -183,12 +185,12 @@ export class RuntimeApplication {
     }
     if (
       this.dependencies.clock.now() - persisted.lastInboundAt >=
-      BLOCK_AFTER_MS
+      SESSION_BLOCK_AFTER_MS
     ) {
       return this.failure(
         command,
         "SESSION_EXPIRED",
-        "The Weixin session has expired; send a fresh inbound message first.",
+        "The Weixin session has expired; send /recover as a fresh inbound message.",
       );
     }
 
@@ -381,7 +383,9 @@ export class RuntimeApplication {
           ? "reminder"
           : command.purpose === "connection"
             ? "connection"
-            : "text";
+            : command.purpose === "recovery"
+              ? "recovery"
+              : "text";
       return hash.update(`${purpose}\0`).update(command.text).digest("hex");
     }
     return hash
@@ -522,11 +526,11 @@ export class RuntimeApplication {
         renewalDueAt:
           lastInboundAt === null
             ? null
-            : new Date(lastInboundAt + RENEWAL_AFTER_MS).toISOString(),
+            : new Date(lastInboundAt + SESSION_RENEWAL_AFTER_MS).toISOString(),
         expiresAt:
           lastInboundAt === null
             ? null
-            : new Date(lastInboundAt + BLOCK_AFTER_MS).toISOString(),
+            : new Date(lastInboundAt + SESSION_BLOCK_AFTER_MS).toISOString(),
       },
     };
   }

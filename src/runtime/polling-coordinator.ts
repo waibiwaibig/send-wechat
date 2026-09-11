@@ -1,17 +1,23 @@
+import { createHash } from "node:crypto";
+
 import type { PollUpdatesResult } from "../ilink/client.js";
 import type { InboundText } from "../messaging/text-inbox.js";
 import type { SendTextCommand } from "./application.js";
 import type { Clock, CredentialStore, StateStore } from "./ports.js";
+import {
+  isRecoverCommand,
+  SESSION_BLOCK_AFTER_MS,
+  SESSION_RENEWAL_AFTER_MS,
+} from "./session-policy.js";
 
-const HOUR_MS = 60 * 60 * 1000;
-const RENEWAL_AFTER_MS = 22 * HOUR_MS;
-const BLOCK_AFTER_MS = 24 * HOUR_MS;
 const AUTH_STALE_DELAY_MS = 5000;
 const IDLE_DELAY_MS = 1000;
 const MAX_BACKOFF_MS = 60_000;
 const MIN_PLAUSIBLE_MESSAGE_TIME = Date.parse("2020-01-01T00:00:00.000Z");
 const CONNECTION_CONFIRMATION_TEXT =
   "send-wechat 已连接，可以开始使用。 / send-wechat is connected and ready.";
+const RECOVERY_CONFIRMATION_TEXT =
+  "send-wechat 会话已续期，可以继续使用。 / Session renewed; you can continue using send-wechat.";
 
 export type PollingIlinkPort = {
   pollUpdates(params: {
@@ -117,15 +123,32 @@ export class PollingCoordinator {
         message.messageType === 1 &&
         message.fromUserId === state.binding.userId,
     );
-    const inbound = validBoundMessages
-      .filter(
-        (message) =>
-          message.contextToken !== null && message.contextToken !== "",
-      )
+    const inboundCandidates = validBoundMessages
       .map((message) => ({
-        ...message,
+        message,
         effectiveTime: this.effectiveInboundTime(message.createTimeMs),
       }))
+      .filter(
+        ({ message, effectiveTime }) =>
+          message.contextToken !== null &&
+          message.contextToken !== "" &&
+          (state.lastInboundAt === null || effectiveTime > state.lastInboundAt),
+      )
+      .sort((left, right) => left.effectiveTime - right.effectiveTime)
+      .at(-1);
+
+    const recovery = validBoundMessages
+      .map((message) => ({
+        message,
+        effectiveTime: this.effectiveInboundTime(message.createTimeMs),
+      }))
+      .filter(({ message, effectiveTime }) =>
+        this.isFreshRecoveryMessage(
+          message,
+          effectiveTime,
+          state.lastInboundAt,
+        ),
+      )
       .sort((left, right) => left.effectiveTime - right.effectiveTime)
       .at(-1);
 
@@ -133,6 +156,7 @@ export class PollingCoordinator {
       if (
         typeof message.id !== "string" ||
         typeof message.text !== "string" ||
+        isRecoverCommand(message.text) ||
         !isValidInboundText(message.id, message.text)
       ) {
         return [];
@@ -145,6 +169,23 @@ export class PollingCoordinator {
         },
       ];
     });
+    const activatesConnection =
+      inboundCandidates !== undefined &&
+      recovery === undefined &&
+      (state.lastInboundAt === null || secret.contextToken === null);
+    if (inboundCandidates !== undefined) {
+      const contextToken = inboundCandidates.message.contextToken;
+      if (contextToken === null || contextToken === "")
+        throw new Error("INBOUND_CONTEXT_TOKEN_INVALID");
+      secret.contextToken = contextToken;
+      await this.dependencies.credentialStore.save(secret);
+      state.lastInboundAt = inboundCandidates.effectiveTime;
+      state.reminderAttemptedFor = null;
+    }
+    state.pollCursor = result.cursor;
+    await this.dependencies.stateStore.save(state);
+    // Persist the cursor and renewed session before exposing ordinary input to
+    // the secretary. Recovery is consumed above and never enters this inbox.
     if (this.dependencies.inbox !== undefined && inboxMessages.length > 0) {
       try {
         this.dependencies.inbox.append(inboxMessages);
@@ -154,19 +195,22 @@ export class PollingCoordinator {
       }
     }
 
-    const activatesConnection =
-      inbound !== undefined &&
-      (state.lastInboundAt === null || secret.contextToken === null);
-    if (inbound !== undefined && inbound.contextToken !== null) {
-      secret.contextToken = inbound.contextToken;
-      await this.dependencies.credentialStore.save(secret);
-      state.lastInboundAt = inbound.effectiveTime;
-      state.reminderAttemptedFor = null;
-    }
-    state.pollCursor = result.cursor;
-    await this.dependencies.stateStore.save(state);
-    if (activatesConnection && inbound !== undefined) {
-      const idempotencyKey = `connection:${inbound.effectiveTime}`;
+    if (recovery !== undefined) {
+      const idempotencyKey = recoveryIdempotencyKey(
+        recovery.message.id,
+        recovery.effectiveTime,
+      );
+      await this.dependencies.runtime
+        .execute({
+          type: "send-text",
+          requestId: idempotencyKey,
+          idempotencyKey,
+          text: RECOVERY_CONFIRMATION_TEXT,
+          purpose: "recovery",
+        })
+        .catch(() => undefined);
+    } else if (activatesConnection && inboundCandidates !== undefined) {
+      const idempotencyKey = `connection:${inboundCandidates.effectiveTime}`;
       await this.dependencies.runtime
         .execute({
           type: "send-text",
@@ -226,8 +270,8 @@ export class PollingCoordinator {
       return;
     const age = this.dependencies.clock.now() - lastInboundAt;
     if (
-      age < RENEWAL_AFTER_MS ||
-      age >= BLOCK_AFTER_MS ||
+      age < SESSION_RENEWAL_AFTER_MS ||
+      age >= SESSION_BLOCK_AFTER_MS ||
       !this.dependencies.runtime.isDeliveryIdle()
     ) {
       return;
@@ -247,7 +291,7 @@ export class PollingCoordinator {
       type: "send-text",
       requestId: `reminder:${lastInboundAt}`,
       idempotencyKey: `reminder:${lastInboundAt}`,
-      text: "send-wechat 会话将在约 2 小时后过期。请回复任意内容续期。 / Reply with anything to renew.",
+      text: "send-wechat 会话将在 1 小时内过期。请发送 /recover 续期。 / The session expires within 1 hour; send /recover to renew.",
       purpose: "reminder",
     });
   }
@@ -262,6 +306,31 @@ export class PollingCoordinator {
       return now;
     }
     return value;
+  }
+
+  private isFreshRecoveryMessage(
+    message: Extract<PollUpdatesResult, { status: "ok" }>["inbound"][number],
+    effectiveTime: number,
+    previousInboundAt: number | null,
+  ): boolean {
+    if (
+      !isRecoverCommand(message.text ?? "") ||
+      message.contextToken === null ||
+      message.contextToken === ""
+    )
+      return false;
+    const now = this.dependencies.clock.now();
+    if (
+      message.createTimeMs !== null &&
+      (message.createTimeMs < MIN_PLAUSIBLE_MESSAGE_TIME ||
+        message.createTimeMs > now + 5 * 60 * 1000)
+    )
+      return false;
+    return (
+      effectiveTime <= now &&
+      now - effectiveTime < SESSION_BLOCK_AFTER_MS &&
+      (previousInboundAt === null || effectiveTime > previousInboundAt)
+    );
   }
 
   private backoffDelay(): number {
@@ -359,4 +428,17 @@ function isValidInboundText(id: string, text: string): boolean {
     Array.from(text).length <= 4000 &&
     !/\u0000/.test(text)
   );
+}
+
+function recoveryIdempotencyKey(
+  id: string | undefined,
+  effectiveTime: number,
+): string {
+  if (id !== undefined && /^[A-Za-z0-9._:-]{1,118}$/.test(id))
+    return `recover:${id}`;
+  if (id !== undefined) {
+    const digest = createHash("sha256").update(id).digest("hex");
+    return `recover:${digest}`;
+  }
+  return `recover:at-${effectiveTime}`;
 }

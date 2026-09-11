@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { PollingCoordinator } from "../src/runtime/polling-coordinator.js";
 import type { PollUpdatesResult } from "../src/ilink/client.js";
+import type { InboundText } from "../src/messaging/text-inbox.js";
 import type { CredentialStore, StateStore } from "../src/runtime/ports.js";
 import type { PersistedState, SecretBundle } from "../src/runtime/state.js";
 
@@ -413,6 +414,171 @@ describe("polling coordinator interface", () => {
     expect(credentialStore.secret?.contextToken).toBe("new-context");
   });
 
+  it("consumes a fresh /recover before the secretary and acknowledges it once", async () => {
+    const stateStore = new MemoryStateStore(state());
+    const credentialStore = new MemoryCredentialStore(secret);
+    const appended: InboundText[][] = [];
+    const deliveries: unknown[] = [];
+    const result: PollUpdatesResult = {
+      status: "ok",
+      cursor: "after-recover",
+      suggestedTimeoutMs: 27000,
+      inbound: [
+        {
+          messageType: 1,
+          fromUserId: "bound-user",
+          contextToken: "recovered-context",
+          createTimeMs: now - 2000,
+          id: "recover-1",
+          text: "/recover",
+        },
+        {
+          messageType: 1,
+          fromUserId: "bound-user",
+          contextToken: "recovered-context",
+          createTimeMs: now - 1000,
+          id: "ordinary-1",
+          text: "please answer this",
+        },
+      ],
+    };
+    const coordinator = new PollingCoordinator({
+      stateStore,
+      credentialStore,
+      ilink: {
+        async pollUpdates() {
+          return result;
+        },
+        async notifyLifecycle() {},
+      },
+      inbox: {
+        append(messages) {
+          appended.push(messages);
+        },
+      },
+      runtime: {
+        isDeliveryIdle: () => true,
+        async execute(command) {
+          deliveries.push({
+            command,
+            recordedCursor: stateStore.state?.pollCursor,
+            recordedLastInboundAt: stateStore.state?.lastInboundAt,
+            recordedContextToken: credentialStore.secret?.contextToken,
+          });
+          return { ok: true };
+        },
+      },
+      clock: { now: () => now },
+      sleep: async () => {},
+      random: () => 0.5,
+    });
+
+    await coordinator.pollOnce();
+    await coordinator.pollOnce();
+
+    expect(appended).toEqual([
+      [
+        {
+          id: "ordinary-1",
+          text: "please answer this",
+          receivedAt: now - 1000,
+        },
+      ],
+      [
+        {
+          id: "ordinary-1",
+          text: "please answer this",
+          receivedAt: now - 1000,
+        },
+      ],
+    ]);
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({
+      command: {
+        type: "send-text",
+        requestId: "recover:recover-1",
+        idempotencyKey: "recover:recover-1",
+        purpose: "recovery",
+      },
+      recordedCursor: "after-recover",
+      recordedLastInboundAt: now - 1000,
+      recordedContextToken: "recovered-context",
+    });
+    expect(stateStore.state?.lastInboundAt).toBe(now - 1000);
+  });
+
+  it("drops invalid, unbound, and replayed /recover commands without acknowledging them", async () => {
+    const stateStore = new MemoryStateStore(state(now - 10_000));
+    const credentialStore = new MemoryCredentialStore({
+      ...secret,
+      contextToken: "existing-context",
+    });
+    const appended: InboundText[][] = [];
+    const deliveries: unknown[] = [];
+    const coordinator = new PollingCoordinator({
+      stateStore,
+      credentialStore,
+      ilink: {
+        async pollUpdates() {
+          return {
+            status: "ok" as const,
+            cursor: "after-recovery-edges",
+            suggestedTimeoutMs: 27000,
+            inbound: [
+              {
+                messageType: 1,
+                fromUserId: "bound-user",
+                contextToken: null,
+                createTimeMs: now,
+                id: "invalid-token",
+                text: "/recover",
+              },
+              {
+                messageType: 1,
+                fromUserId: "other-user",
+                contextToken: "other-context",
+                createTimeMs: now,
+                id: "unbound",
+                text: "/recover",
+              },
+              {
+                messageType: 1,
+                fromUserId: "bound-user",
+                contextToken: "replayed-context",
+                createTimeMs: now - 20_000,
+                id: "replayed",
+                text: "／recover",
+              },
+            ],
+          };
+        },
+        async notifyLifecycle() {},
+      },
+      inbox: {
+        append(messages) {
+          appended.push(messages);
+        },
+      },
+      runtime: {
+        isDeliveryIdle: () => true,
+        async execute(command) {
+          deliveries.push(command);
+          return { ok: true };
+        },
+      },
+      clock: { now: () => now },
+      sleep: async () => {},
+      random: () => 0.5,
+    });
+
+    await coordinator.pollOnce();
+
+    expect(deliveries).toEqual([]);
+    expect(appended).toEqual([]);
+    expect(stateStore.state?.lastInboundAt).toBe(now - 10_000);
+    expect(credentialStore.secret?.contextToken).toBe("existing-context");
+  });
+
   it("marks stale authentication and stops treating the session as ready", async () => {
     const stateStore = new MemoryStateStore(state(now - 60_000));
     const coordinator = new PollingCoordinator({
@@ -445,8 +611,8 @@ describe("polling coordinator interface", () => {
     expect(stateStore.state?.authStale).toBe(true);
   });
 
-  it("records the hour-22 reminder before enqueueing it and never repeats it", async () => {
-    const windowStart = now - 22 * 60 * 60 * 1000;
+  it("records the hour-23 reminder before enqueueing it and never repeats it", async () => {
+    const windowStart = now - 23 * 60 * 60 * 1000;
     const due = state(windowStart);
     due.reminderAttemptedFor = null;
     const stateStore = new MemoryStateStore(due);
@@ -495,6 +661,195 @@ describe("polling coordinator interface", () => {
       },
       recorded: windowStart,
     });
+  });
+
+  it.each([
+    {
+      label: "one minute before the 23-hour renewal point",
+      age: 23 * 60 * 60 * 1000 - 60 * 1000,
+      idle: true,
+    },
+    {
+      label: "at the 24-hour expiry point",
+      age: 24 * 60 * 60 * 1000,
+      idle: true,
+    },
+    {
+      label: "while delivery is busy",
+      age: 23 * 60 * 60 * 1000,
+      idle: false,
+    },
+  ])("does not send a reminder $label", async ({ age, idle }) => {
+    const reminders: unknown[] = [];
+    const stateStore = new MemoryStateStore(state(now - age));
+    stateStore.state!.reminderAttemptedFor = null;
+    const coordinator = new PollingCoordinator({
+      stateStore,
+      credentialStore: new MemoryCredentialStore({
+        ...secret,
+        contextToken: "context",
+      }),
+      ilink: {
+        async pollUpdates() {
+          return {
+            status: "ok" as const,
+            cursor: "next",
+            suggestedTimeoutMs: 35000,
+            inbound: [],
+          };
+        },
+        async notifyLifecycle() {},
+      },
+      runtime: {
+        isDeliveryIdle: () => idle,
+        async execute(command) {
+          reminders.push(command);
+          return { ok: true };
+        },
+      },
+      clock: { now: () => now },
+      sleep: async () => {},
+      random: () => 0.5,
+    });
+
+    await coordinator.pollOnce();
+
+    expect(reminders).toEqual([]);
+    expect(stateStore.state?.reminderAttemptedFor).toBeNull();
+  });
+
+  it("rearms the reminder after a fresh inbound renewal", async () => {
+    let clockNow = now;
+    let inbound: Extract<PollUpdatesResult, { status: "ok" }>["inbound"] = [];
+    const reminders: unknown[] = [];
+    const due = state(clockNow - 23 * 60 * 60 * 1000);
+    due.reminderAttemptedFor = null;
+    const stateStore = new MemoryStateStore(due);
+    const credentialStore = new MemoryCredentialStore({
+      ...secret,
+      contextToken: "context",
+    });
+    const coordinator = new PollingCoordinator({
+      stateStore,
+      credentialStore,
+      ilink: {
+        async pollUpdates() {
+          return {
+            status: "ok" as const,
+            cursor: `cursor-${clockNow}`,
+            suggestedTimeoutMs: 35000,
+            inbound,
+          };
+        },
+        async notifyLifecycle() {},
+      },
+      runtime: {
+        isDeliveryIdle: () => true,
+        async execute(command) {
+          reminders.push(command);
+          return { ok: true };
+        },
+      },
+      clock: { now: () => clockNow },
+      sleep: async () => {},
+      random: () => 0.5,
+    });
+
+    await coordinator.pollOnce();
+    inbound = [
+      {
+        messageType: 1,
+        fromUserId: "bound-user",
+        contextToken: "renewed-context",
+        createTimeMs: now,
+        id: "renewal",
+        text: "ordinary renewal",
+      },
+    ];
+    await coordinator.pollOnce();
+    clockNow += 23 * 60 * 60 * 1000;
+    inbound = [];
+    await coordinator.pollOnce();
+
+    expect(reminders).toHaveLength(2);
+    expect(stateStore.state?.reminderAttemptedFor).toBe(
+      stateStore.state?.lastInboundAt,
+    );
+  });
+
+  it("acknowledges fresh recovery even when the optional inbox is absent or broken", async () => {
+    for (const broken of [false, true]) {
+      const stateStore = new MemoryStateStore(state());
+      const credentialStore = new MemoryCredentialStore(secret);
+      const deliveries: unknown[] = [];
+      let appendCalls = 0;
+      const coordinator = new PollingCoordinator({
+        stateStore,
+        credentialStore,
+        ilink: {
+          async pollUpdates() {
+            return {
+              status: "ok" as const,
+              cursor: broken ? "broken-inbox" : "no-inbox",
+              suggestedTimeoutMs: 27000,
+              inbound: [
+                {
+                  messageType: 1,
+                  fromUserId: "bound-user",
+                  contextToken: "recovered-context",
+                  createTimeMs: now - 1000,
+                  id: broken ? "recover-broken" : "recover-absent",
+                  text: "/recover",
+                },
+                {
+                  messageType: 1,
+                  fromUserId: "bound-user",
+                  contextToken: "recovered-context",
+                  createTimeMs: now - 500,
+                  id: "ordinary-after-recover",
+                  text: "ordinary input",
+                },
+              ],
+            };
+          },
+          async notifyLifecycle() {},
+        },
+        ...(broken
+          ? {
+              inbox: {
+                append(_messages: InboundText[]) {
+                  appendCalls += 1;
+                  throw new Error("inbox unavailable");
+                },
+              },
+            }
+          : {}),
+        runtime: {
+          isDeliveryIdle: () => true,
+          async execute(command) {
+            deliveries.push({
+              command,
+              cursor: stateStore.state?.pollCursor,
+              lastInboundAt: stateStore.state?.lastInboundAt,
+            });
+            return { ok: true };
+          },
+        },
+        clock: { now: () => now },
+        sleep: async () => {},
+        random: () => 0.5,
+      });
+
+      await coordinator.pollOnce();
+
+      expect(deliveries).toHaveLength(1);
+      expect(deliveries[0]).toMatchObject({
+        command: { purpose: "recovery" },
+        cursor: broken ? "broken-inbox" : "no-inbox",
+        lastInboundAt: now - 500,
+      });
+      expect(appendCalls).toBe(broken ? 1 : 0);
+    }
   });
 
   it("uses a bounded timestamp for implausible inbound messages and still confirms connection", async () => {

@@ -98,7 +98,7 @@ describe("CLI contract boundaries", () => {
     expect(localizedMessage("NOT_LOGGED_IN", "zh-CN")).toContain("尚未登录");
     expect(localizedMessage("NOT_LOGGED_IN", "en")).toContain("not logged in");
     expect(localizedMessage("SESSION_EXPIRED", "zh-CN")).toContain(
-      "blocked: 微信会话已过期，请先给 ClawBot 发一条消息",
+      "微信会话已过期，请先给 ClawBot 单独发送 /recover",
     );
     expect(localizedMessage("UNKNOWN", "zh-CN")).toContain("UNKNOWN");
     expect(localizedMessage("UNKNOWN", "en")).toContain("UNKNOWN");

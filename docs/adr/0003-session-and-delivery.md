@@ -18,10 +18,21 @@ the new session and polling cursor before the attempt. Rejected or ambiguous
 confirmation does not roll back readiness and is never automatically retried.
 Ordinary inbound session renewal does not send another confirmation.
 
-The daemon attempts one renewal reminder after hour 22 and before hour 24, only
+The daemon attempts one renewal reminder at or after hour 23 and before hour 24, only
 while the delivery queue is idle. It records the attempt before network I/O and
 never retries an ambiguous reminder. At hour 24 it fails closed and blocks sends
-until a new inbound message arrives.
+until a new inbound message arrives. This rolling 24-hour cutoff is the local
+session policy; it does not guarantee that upstream accepts every send before
+the cutoff. Polling delays, outages, and a busy delivery queue can delay or
+prevent the reminder.
+
+A standalone `/recover` (including a fullwidth leading slash) is consumed by
+the Hub before the optional text inbox. A fresh valid command from the binding
+user renews the session through the ordinary inbound path and attempts one
+acknowledgement after persisting the session and cursor, using the serialized
+send and idempotency path. It never starts or interrupts a Codex turn and works
+without a gateway. Invalid or replayed commands must not claim fresh renewal.
+Initial activation with `/recover` sends only one acknowledgement.
 
 Each request carries one text payload or one file payload. Sends are serialized,
 paced, and kept only in memory. There is no persistent outbox. The daemon never
