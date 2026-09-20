@@ -1,12 +1,11 @@
 import { dirname, join } from "node:path";
 
 import type { PlatformPaths } from "../platform/paths.js";
-
-export type GatewayChannel = "wechat";
+import type { Channel } from "../messaging/channel-router.js";
 
 export function gatewayPaths(
   hub: PlatformPaths,
-  channel: GatewayChannel,
+  channel: Channel,
 ): {
   directory: string;
   config: string;

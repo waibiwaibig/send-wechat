@@ -191,29 +191,35 @@ describe("gateway CLI", () => {
     ).resolves.toMatchObject({ installationId: saved?.installationId });
   });
 
-  it("rejects Feishu before starting a service", async () => {
+  it("accepts a local installation when setting up the gateway", async () => {
     const { root, paths } = await fixtureRoot();
     const work = path.join(root, "codex-work");
     await mkdir(work);
+    await writeFile(
+      paths.installationFile,
+      JSON.stringify({ schemaVersion: 1, role: "local" }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      path.join(paths.stateDir, "channels.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        channels: ["feishu"],
+        defaultChannel: "feishu",
+      }),
+      { mode: 0o600 },
+    );
     const service = fakeService();
-    const streams = output();
-    const assertHub = vi.fn(async () => undefined);
 
     await expect(
       runGatewayCli(["--channel", "feishu", "setup", "--cwd", work], {
         paths,
         service,
-        stdout: streams.emit,
-        stderr: streams.error,
-        assertHub,
         resolveCodex: async () => "/opt/codex/bin/codex",
       }),
-    ).resolves.toBe(5);
-
-    expect(streams.stderr).toEqual(["GATEWAY_CHANNEL_INVALID\n"]);
-    expect(assertHub).not.toHaveBeenCalled();
-    expect(service.install).not.toHaveBeenCalled();
-    expect(service.start).not.toHaveBeenCalled();
+    ).resolves.toBe(0);
+    expect(service.install).toHaveBeenCalledOnce();
+    expect(service.start).toHaveBeenCalledOnce();
   });
 
   it("refuses setup while the service is running without replacing its config", async () => {
@@ -635,7 +641,6 @@ describe("gateway CLI", () => {
     await expect(runGatewayCli(["--help"], dependencies)).resolves.toBe(0);
     expect(pathAccesses).toBe(0);
     expect(streams.stdout.join("")).toContain("send-message-gateway");
-    expect(streams.stdout.join("")).toContain("gateway channel: wechat");
   });
 
   it("renders version without resolving platform paths or service dependencies", async () => {

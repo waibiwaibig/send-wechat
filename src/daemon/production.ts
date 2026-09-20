@@ -4,7 +4,7 @@ import {
   FeishuCredentialStore,
 } from "../messaging/config.js";
 import { ChannelRouter } from "../messaging/channel-router.js";
-import { FeishuClient } from "../feishu/client.js";
+import { FeishuClient, type FeishuInboundMessage } from "../feishu/client.js";
 import { FeishuRuntime } from "../feishu/runtime.js";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
@@ -132,7 +132,11 @@ export async function startProductionDaemon(
     : null;
   if (configuration.channels.includes("feishu") && feishuSecret === null)
     throw new Error("FEISHU_CONFIGURATION_REQUIRED");
-  const feishu = feishuSecret === null ? null : new FeishuClient(feishuSecret);
+  const feishu =
+    feishuSecret === null ? null : new FeishuClient(feishuSecret, feishuSecret);
+  const feishuInbox = new SqliteTextInbox(
+    join(paths.stateDir, "feishu-inbox.sqlite"),
+  );
   const channels = new ChannelRouter({
     defaultChannel: configuration.defaultChannel,
     providers: {
@@ -152,7 +156,7 @@ export async function startProductionDaemon(
   const invitations = new PairingInvitations();
   const router = new DaemonRequestRouter({
     runtime: channels,
-    inboxes: { wechat: inbox },
+    inboxes: { wechat: inbox, feishu: feishuInbox },
     login,
     withPollingPaused: (operation) => polling.withPollingPaused(operation),
     issuePairingInvitation: () => {
@@ -218,6 +222,72 @@ export async function startProductionDaemon(
   });
   const abort = new AbortController();
   await server.start();
+  let incomingTail = Promise.resolve();
+  let incomingCount = 0;
+  const receiveFeishu = (message: FeishuInboundMessage): void => {
+    if (feishu === null) return;
+    if (!feishuInbox.isActive() || incomingCount >= 100) return;
+    incomingCount++;
+    incomingTail = incomingTail
+      .then(async () => {
+        if (!feishuInbox.isActive()) return;
+        const resources = [];
+        let text = message.text;
+        for (const attachment of message.attachments.slice(0, 10)) {
+          try {
+            const path = await attachments.save(
+              attachment.fileName,
+              (destination) =>
+                feishu.downloadResource(
+                  message.id,
+                  attachment.key,
+                  attachment.type,
+                  destination,
+                ),
+            );
+            resources.push({
+              type: attachment.type,
+              path,
+              fileName: attachment.fileName,
+            });
+          } catch {
+            text += "\n[附件下载失败，请重新发送该附件。]";
+          }
+        }
+        feishuInbox.append([
+          {
+            id: message.id,
+            text,
+            receivedAt: message.receivedAt,
+            attachments: resources,
+          },
+        ]);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        incomingCount--;
+      });
+  };
+  let receiving = false;
+  let receiverTask = Promise.resolve();
+  const receiverTimer = setInterval(() => {
+    receiverTask = receiverTask
+      .then(async () => {
+        if (feishu === null || abort.signal.aborted) return;
+        const active = feishuInbox.isActive();
+        if (active && !receiving) {
+          await feishu.startReceiving(receiveFeishu);
+          receiving = true;
+        } else if (!active && receiving) {
+          feishu.close();
+          receiving = false;
+        }
+      })
+      .catch(() => {
+        receiving = false;
+      });
+  }, 1000);
+  receiverTimer.unref();
   const pollingTask = configuration.channels.includes("wechat")
     ? polling.run(abort.signal)
     : Promise.resolve();
@@ -275,6 +345,11 @@ export async function startProductionDaemon(
   return {
     async close() {
       abort.abort();
+      clearInterval(receiverTimer);
+      await receiverTask;
+      feishu?.close();
+      await incomingTail;
+      feishuInbox.close();
       await relayConnector?.stop();
       await relayUploads?.close();
       await server.close();

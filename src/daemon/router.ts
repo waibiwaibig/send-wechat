@@ -126,7 +126,6 @@ export class DaemonRequestRouter {
   }
 
   private requireInbox(channel?: "wechat" | "feishu"): TextInboxLike {
-    if (channel === "feishu") throw new Error("INBOX_UNAVAILABLE");
     if (channel !== undefined && this.dependencies.inboxes !== undefined) {
       const inbox = this.dependencies.inboxes[channel];
       if (inbox === undefined) throw new Error("INBOX_UNAVAILABLE");

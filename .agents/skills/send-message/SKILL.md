@@ -1,13 +1,11 @@
 ---
 name: send-message
-description: Send text/images/files through WeChat or text notifications through Feishu when asked to 发微信 or 发飞书; install, configure, pair, diagnose send-message, or configure its Codex notifications and secretary.
+description: Send text, images, or files when asked to 发微信, 发飞书, or send through WeChat or Feishu; install, configure, pair, diagnose send-message, or configure its Codex notifications and secretary.
 ---
 
 # send-message
 
 Use `send-message` with the user's configured channels and fixed recipients.
-Feishu is text-only via group Webhook, with no self-built app or chat interaction.
-Images/files and the secretary are WeChat-only. Do not silently switch channels.
 The local Hub owns provider credentials. Remote clients forward encrypted requests
 through the user's optional Relay.
 
@@ -26,7 +24,7 @@ through the user's optional Relay.
    automatically resent; an accepted channel must not be repeated to repair another.
 
 The user's send request authorizes sending its specified content. Each channel has
-one configured recipient: the QR-bound WeChat user, or the Feishu Webhook group.
+one configured recipient: the QR-bound WeChat user, or the configured Feishu DM/group.
 Changing recipients requires configuration. Never choose another channel after failure.
 For `both`, report partial success explicitly. Device notifications and human receipt
 require separate evidence.
@@ -39,10 +37,10 @@ Install this complete skill directory in each Agent's user-level skill directory
 all Hub/client devices. npm installation alone does not register an Agent skill.
 Verify discovery in a fresh Agent session separately from CLI readiness.
 
-After basic delivery works, offer Codex task notifications and, when WeChat is configured, the WeChat Codex secretary as
+After basic delivery works, offer Codex task notifications and the Codex secretary as
 separate opt-in features. Reuse existing consent. See [gateway.md](gateway.md) for
 secretary setup and [notifications.md](notifications.md) for task notifications.
 
 Keep credentials out of argv, logs, committed files, and reports. Use protected stdin
-for Feishu Webhook configuration and short-lived Relay pairing invitations. Perform reset
+for Feishu app configuration and short-lived Relay pairing invitations. Perform reset
 only at the user's request and complete its terminal confirmation.

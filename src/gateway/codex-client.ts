@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { APP_VERSION } from "../app/version.js";
-import type { GatewayChannel } from "./paths.js";
+import type { Channel } from "../messaging/channel-router.js";
 
 export type ModelSelection = {
   model: string;
@@ -73,7 +73,7 @@ export interface CodexPort {
 export type CodexAppServerOptions = {
   executable: string;
   cwd: string;
-  channel: GatewayChannel;
+  channel: Channel;
   args?: string[];
   env?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
@@ -128,7 +128,7 @@ const MESSAGE_CONNECTION_SKILL_ROOT = fileURLToPath(
 export class CodexAppServer implements CodexPort {
   private readonly executable: string;
   private readonly cwd: string;
-  private readonly channel: GatewayChannel;
+  private readonly channel: Channel;
   private readonly args: string[];
   private readonly env: NodeJS.ProcessEnv;
   private readonly requestTimeoutMs: number;
