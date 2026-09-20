@@ -51,6 +51,7 @@ describe("gateway paths", () => {
       );
       expect(gateway.service.serviceConfigPath).not.toBe(hub.serviceConfigPath);
       expect(gateway.service.ipcEndpoint).toBe(hub.ipcEndpoint);
+      expect(gatewayPaths(hub, "feishu").directory).not.toBe(gateway.directory);
     },
   );
 });

@@ -22,11 +22,11 @@ CLI with `send-message --version` and skill discovery in a fresh Agent session.
 - Feishu: `send-message setup --channels feishu --feishu-config-stdin`;
   follow [feishu.md](feishu.md) and supply the protected configuration through stdin.
 - Both: use `--channels both --default-channel wechat|feishu`, adding
-  `--feishu-config-stdin` when the Feishu Webhook credentials are new.
+  `--feishu-config-stdin` when the Feishu application credentials are new.
 
 For QR rendering to a protected image use `--qr-file PATH`. Display it to the user,
 wait for their scan and verification, and complete the initial inbound activation.
-Secrets are never command arguments. `doctor` checks local Feishu configuration without probing the Webhook; a user-authorized test
+Secrets are never command arguments. `doctor` performs checks; a user-authorized test
 with `send --channel CHANNEL` establishes API acceptance for that selected channel.
 Ask the user to confirm device receipt when that is part of the requested outcome.
 
@@ -54,8 +54,7 @@ means delivery is unavailable; there is no durable outgoing queue or alternate c
 Once basic delivery is verified, separately offer:
 
 1. Codex root-task completion and question notifications: [notifications.md](notifications.md).
-2. The WeChat Codex secretary, only when WeChat is configured: [gateway.md](gateway.md).
-   Feishu has no incoming chat or secretary support.
+2. The Codex secretary: [gateway.md](gateway.md).
 
 Ask only for missing choices, reuse existing consent, and leave declined features off.
 Routine diagnosis and individual sends do not trigger these offers.

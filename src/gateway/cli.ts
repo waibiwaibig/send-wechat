@@ -18,9 +18,10 @@ import {
   createServiceManager,
   type ServiceManager,
 } from "../platform/service.js";
+import type { Channel } from "../messaging/channel-router.js";
 import { JsonInstallationStore } from "../storage/installation-store.js";
 import { readPrivateJson, writePrivateJson } from "../storage/private-json.js";
-import { gatewayPaths, type GatewayChannel } from "./paths.js";
+import { gatewayPaths } from "./paths.js";
 import {
   gatewayErrorCode,
   gatewayStatusSchema,
@@ -76,8 +77,8 @@ export async function resolveCodexExecutable(value: string): Promise<string> {
   throw new Error("GATEWAY_CODEX_EXECUTABLE_NOT_FOUND");
 }
 
-function parseChannel(value: unknown): GatewayChannel {
-  if (value === "wechat") return value;
+function parseChannel(value: unknown): Channel {
+  if (value === "wechat" || value === "feishu") return value;
   throw new Error("GATEWAY_CHANNEL_INVALID");
 }
 
@@ -104,8 +105,8 @@ export async function runGatewayCli(
   let pathsValue: PlatformPaths | undefined;
   const hubPaths = (): PlatformPaths =>
     (pathsValue ??= dependencies.paths ?? currentPlatformPaths());
-  const services = new Map<GatewayChannel, ServiceManager>();
-  const service = (channel: GatewayChannel): ServiceManager => {
+  const services = new Map<Channel, ServiceManager>();
+  const service = (channel: Channel): ServiceManager => {
     const existing = services.get(channel);
     if (existing !== undefined) return existing;
     if (dependencies.service !== undefined) {
@@ -146,9 +147,7 @@ export async function runGatewayCli(
     if (!configuration?.channels.includes(parseChannel(program.opts().channel)))
       throw new Error("CHANNEL_NOT_CONFIGURED");
   };
-  const loadConfig = async (
-    channel: GatewayChannel,
-  ): Promise<GatewayConfig> => {
+  const loadConfig = async (channel: Channel): Promise<GatewayConfig> => {
     const config = await readPrivateJson(
       gatewayPaths(hubPaths(), channel).config,
       gatewayConfigSchema,
@@ -165,8 +164,8 @@ export async function runGatewayCli(
     );
   };
   const run = async (): Promise<void> => {
-    const channel = parseChannel(program.opts().channel);
     await assertHub();
+    const channel = parseChannel(program.opts().channel);
     const config = await loadConfig(channel);
     const abort = new AbortController();
     const stop = (): void => abort.abort();
@@ -189,11 +188,11 @@ export async function runGatewayCli(
   const program = new Command()
     .name("send-message-gateway")
     .description(
-      "Bridge the WeChat channel to its persistent Codex CLI conversation.",
+      "Bridge the selected channel to its persistent Codex CLI conversation.",
     )
     .version(APP_VERSION)
     .option("--json", "emit one JSON result for control commands")
-    .requiredOption("--channel <channel>", "gateway channel: wechat")
+    .requiredOption("--channel <channel>", "gateway channel: wechat or feishu")
     .helpCommand(false)
     .configureOutput({ writeOut: stdout, writeErr: stderr })
     .exitOverride();
@@ -211,8 +210,8 @@ export async function runGatewayCli(
     )
     .action(
       async (options: { cwd: string; codex: string; permission: string }) => {
-        const channel = parseChannel(program.opts().channel);
         await assertHub();
+        const channel = parseChannel(program.opts().channel);
         const permission = parsePermission(options.permission);
         const workingDirectory = await realpath(resolve(options.cwd));
         if (!(await stat(workingDirectory)).isDirectory())
@@ -284,15 +283,15 @@ export async function runGatewayCli(
     "uninstall",
   ] as const) {
     controls.command(operation).action(async () => {
-      const channel = parseChannel(program.opts().channel);
       if (
         operation === "start" ||
         operation === "restart" ||
         operation === "install"
       ) {
         await assertHub();
-        await loadConfig(channel);
+        await loadConfig(parseChannel(program.opts().channel));
       }
+      const channel = parseChannel(program.opts().channel);
       await service(channel)[operation]();
       success(`service ${operation}`, { operation, channel });
     });
