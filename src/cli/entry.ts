@@ -83,7 +83,7 @@ function buildProgram(
     )
     .option(
       "--feishu-config-stdin",
-      "read Feishu application configuration JSON securely from stdin",
+      "read Feishu Webhook configuration JSON securely from stdin",
     )
     .option("--relay", "enable a personal Relay for additional devices")
     .action(async (options: Record<string, unknown>) => {

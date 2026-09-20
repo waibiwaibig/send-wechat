@@ -10,13 +10,16 @@ Never include credentials, QR values, pairing invitations or message bodies in r
   in a fresh Agent session. Verify the public command is `send-message`.
 - Configure WeChat-only, Feishu-only and both. Both must have an explicit default.
 - A local installation must not invoke Cloudflare authorization/provisioning.
-- WeChat QR activation and Feishu application permission checks are separate.
+- WeChat QR activation and Feishu Webhook configuration checks are separate.
 - Test explicit Relay activation and a paired client with only device credentials.
 
 ## Delivery
 
-- Send authorized text, image and file through each configured channel, locally and
-  from a paired client. Verify the actual media type and the chosen fixed recipient.
+- Send authorized text through both channels, and images/files through WeChat, locally
+  and from a paired client. Verify the fixed user/group and actual media type.
+- Feishu media must fail with FEISHU_TEXT_ONLY without contacting its Webhook.
+- Test unsigned and signed Webhooks, keyword/IP rejection, timeout, and throttling.
+- Setup and doctor must not send probes or claim remote credential verification.
 - Omitted selector uses the Hub default. Explicit selection stays on that channel.
 - `both` produces two outcomes. Force one failure and confirm the accepted side is not
   repeated. Unknown-result retry with the same key must not resend.
@@ -25,11 +28,12 @@ Never include credentials, QR values, pairing invitations or message bodies in r
 
 ## Secretary
 
-- On macOS, Linux/WSL and Windows, install each channel's service and inspect its exact
-  `--channel` startup arguments. Check separate state and current thread IDs.
+- On macOS, Linux/WSL and Windows, install the WeChat service and inspect its exact
+  `--channel wechat` startup arguments and saved thread ID.
 - Explicit cwd and default workspace permissions must hold for new threads and turns.
 - Send owner text, image and file; verify Codex input and reply through the same channel.
-- In a Feishu group, another member's commands must not start a Codex turn.
+- Reject `--channel feishu` before creating gateway state or starting a service.
+- Feishu inbox requests must fail; no Feishu event connection or inbox is created.
 - Stop a channel's gateway, send input, restart: inactive input must not become commands.
 - Restart an active service and confirm the existing channel thread resumes.
 - Verify attachment errors are visible and staged content is private and bounded.

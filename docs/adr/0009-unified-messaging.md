@@ -1,6 +1,7 @@
 # ADR 0009: Unified WeChat and Feishu messaging
 
-Status: Accepted, 2026-09-20.
+Status: Accepted, 2026-09-20. Feishu interaction scope superseded by
+[ADR 0010](0010-feishu-send-only.md).
 
 ## Decision
 

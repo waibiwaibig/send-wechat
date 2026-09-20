@@ -1,14 +1,13 @@
 # Codex secretary
 
-The optional gateway connects one configured message channel to one Codex CLI
-conversation. WeChat and Feishu have separate services and conversation pointers.
+The optional gateway connects the configured WeChat channel to one Codex CLI
+conversation. Feishu supports outbound notifications only and has no secretary.
 Install and authenticate Codex on the existing Hub, then choose a working directory:
 
 ```sh
 send-message-gateway --channel wechat setup --cwd /absolute/workspace --permission workspace
-send-message-gateway --channel feishu setup --cwd /absolute/workspace --permission workspace
-send-message-gateway --channel feishu --json status
-send-message-gateway --channel feishu service stop
+send-message-gateway --channel wechat --json status
+send-message-gateway --channel wechat service stop
 ```
 
 `--codex /absolute/path/to/codex` selects an executable. Setup saves the resolved path
@@ -23,10 +22,8 @@ thread. Restart restores it. `/newchat` starts a fresh thread. Send `/` for the 
 command menu, including model/effort, permission, streaming, and interruption controls.
 Internal reasoning and raw tool logs are not sent to the channel.
 
-Feishu group input must match both the configured chat_id and installer open_id.
-Other members cannot command the secretary. Replies use the same channel; no automatic
-fallback or cross-channel conversation merge occurs. WeChat session expiry still
-blocks replies and requires `/recover` from its bound user.
+Replies return through WeChat. Session expiry blocks replies and requires `/recover`
+from its bound user. Feishu cannot supply incoming commands or receive gateway replies.
 
 Only an active gateway lease collects new input in that channel's inbox. Inbox records
 and deduplication are bounded and expire. Stopping the gateway stops command collection;
