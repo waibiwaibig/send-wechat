@@ -82,6 +82,63 @@ function harness(overrides: CliDependencies = {}) {
 }
 
 describe("public CLI", () => {
+  it("forwards Feishu target and rebind options to setup", async () => {
+    let setupOptions: unknown;
+    const fixture = harness({
+      setup: async (options) => {
+        setupOptions = options;
+        return {
+          ok: true,
+          command: "setup",
+          result: { state: "ready" },
+        };
+      },
+    });
+
+    const code = await runCli(
+      [
+        "--json",
+        "setup",
+        "--channels",
+        "feishu",
+        "--feishu-target",
+        "group",
+        "--feishu-rebind",
+      ],
+      fixture.deps,
+    );
+
+    expect(code).toBe(0);
+    expect(setupOptions).toMatchObject({
+      channels: "feishu",
+      feishuTarget: "group",
+      feishuRebind: true,
+    });
+  });
+
+  it("rejects the removed Feishu config stdin option before setup", async () => {
+    let setupCalls = 0;
+    const fixture = harness({
+      setup: async () => {
+        setupCalls += 1;
+        return { ok: true, command: "setup", result: { state: "ready" } };
+      },
+    });
+
+    const code = await runCli(
+      ["--json", "setup", "--feishu-config-stdin"],
+      fixture.deps,
+    );
+
+    expect(code).toBe(2);
+    expect(setupCalls).toBe(0);
+    expect(JSON.parse(fixture.output().stdout)).toMatchObject({
+      ok: false,
+      command: "setup",
+      error: { code: "USAGE_ERROR" },
+    });
+  });
+
   it("uses setup as the only onboarding command and rejects the removed --pair option", async () => {
     let sideEffects = 0;
     const fixture = harness({

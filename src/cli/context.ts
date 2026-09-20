@@ -1,10 +1,5 @@
-import {
-  MessageConfigStore,
-  FeishuCredentialStore,
-  feishuConfigurationSchema,
-  type MessageConfig,
-} from "../messaging/config.js";
-import { FeishuClient } from "../feishu/client.js";
+import { MessageConfigStore, type MessageConfig } from "../messaging/config.js";
+import { setupFeishu } from "../feishu/setup.js";
 import {
   randomBytes as cryptoRandomBytes,
   randomUUID as cryptoRandomUUID,
@@ -393,7 +388,8 @@ export class CliContext {
       clientFlow &&
       (options.channels !== undefined ||
         options.defaultChannel !== undefined ||
-        options.feishuConfigStdin === true ||
+        options.feishuRebind === true ||
+        options.feishuTarget !== undefined ||
         options.relay === true)
     )
       throw new SetupCoordinatorError("CLIENT_HAS_NO_SERVICE");
@@ -420,29 +416,38 @@ export class CliContext {
         channels: [...channels],
         defaultChannel,
       };
+      if (
+        !channels.includes("feishu") &&
+        (options.feishuTarget !== undefined || options.feishuRebind)
+      )
+        throw new SetupCoordinatorError("USAGE_ERROR");
+      let feishuReloaded = false;
       if (channels.includes("feishu")) {
-        const secrets = new FeishuCredentialStore();
-        if (options.feishuConfigStdin) {
-          if (options.pairStdin) throw new SetupCoordinatorError("USAGE_ERROR");
-          const parsed = feishuConfigurationSchema.safeParse(
-            JSON.parse(await this.readStdin()),
-          );
-          if (!parsed.success)
-            throw new SetupCoordinatorError("FEISHU_CONFIGURATION_INVALID");
-          const candidate = new FeishuClient(parsed.data, parsed.data);
-          await candidate.verify();
-          await secrets.save(parsed.data);
-        } else {
-          const existing = await secrets.load();
-          if (existing === null)
-            throw new SetupCoordinatorError("FEISHU_CONFIGURATION_REQUIRED");
-          await new FeishuClient(existing, existing).verify();
+        const service = options.feishuRebind ? this.getServiceManager() : null;
+        const wasRunning = service !== null && (await service.status()).running;
+        // Keep the one-use binding challenge out of an active secretary inbox.
+        if (wasRunning) await service.stop();
+        try {
+          await setupFeishu(paths.stateDir, {
+            ...(options.feishuTarget === undefined
+              ? {}
+              : { target: options.feishuTarget }),
+            ...(options.feishuRebind === true ? { rebind: true } : {}),
+            onOutput: (text) => writeOutput(this.io.stderr, text),
+          });
+        } finally {
+          if (wasRunning) {
+            await service.start();
+            feishuReloaded = true;
+          }
         }
       }
       await store.save(messageConfig);
       if (
         previous !== null &&
-        (options.feishuConfigStdin === true ||
+        ((!feishuReloaded &&
+          (options.feishuRebind === true ||
+            options.feishuTarget !== undefined)) ||
           JSON.stringify(previous) !== JSON.stringify(messageConfig))
       ) {
         const service = this.getServiceManager();

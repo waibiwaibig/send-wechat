@@ -81,9 +81,15 @@ function buildProgram(
         ["wechat", "feishu"],
       ),
     )
+    .addOption(
+      new Option(
+        "--feishu-target <target>",
+        "bind Feishu to your DM (default) or a group",
+      ).choices(["dm", "group"]),
+    )
     .option(
-      "--feishu-config-stdin",
-      "read Feishu application configuration JSON securely from stdin",
+      "--feishu-rebind",
+      "replace the Feishu recipient using a new binding code",
     )
     .option("--relay", "enable a personal Relay for additional devices")
     .action(async (options: Record<string, unknown>) => {

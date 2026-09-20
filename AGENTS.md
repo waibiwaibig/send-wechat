@@ -1,3 +1,11 @@
+## Installation requests
+
+When the user provides this repository link to install or connect messaging, read
+`.agents/skills/send-message/SKILL.md` and follow its `setup.md` workflow through
+user-confirmed delivery. A bare link needs a brief intent/channel clarification.
+For repository development or review, stay with that task; do not configure the
+user's messaging accounts merely because this repository contains an installation skill.
+
 ## Agent skills
 
 ### Issue tracker

@@ -89,7 +89,8 @@ export type SetupOptions = {
   qrFile?: string;
   channels?: "wechat" | "feishu" | "both";
   defaultChannel?: "wechat" | "feishu";
-  feishuConfigStdin?: boolean;
+  feishuTarget?: "dm" | "group";
+  feishuRebind?: boolean;
   relay?: boolean;
 };
 export type RecordValue = Record<string, unknown>;
@@ -267,8 +268,25 @@ export function localizedMessage(
       en: "Select --default-channel wechat|feishu.",
     },
     FEISHU_CONFIGURATION_REQUIRED: {
-      "zh-CN": "需要飞书应用配置；使用 --feishu-config-stdin 从标准输入读取。",
-      en: "Supply Feishu application configuration using --feishu-config-stdin.",
+      "zh-CN": "请运行 setup --channels feishu，完成扫码与接收人绑定。",
+      en: "Run setup --channels feishu to configure and bind the bot.",
+    },
+    FEISHU_BINDING_TIMEOUT: {
+      "zh-CN": "飞书绑定码已过期，请重新运行 setup 获取新码。",
+      en: "Feishu binding expired. Run setup again for a fresh code.",
+    },
+    FEISHU_CONNECTION_CLOSED: {
+      "zh-CN": "飞书事件连接已中断，检查网络和应用事件权限后重新运行 setup。",
+      en: "Feishu event connection closed. Check network and event permissions, then rerun setup.",
+    },
+    FEISHU_REBIND_REQUIRED: {
+      "zh-CN": "更换飞书接收目标请同时使用 --feishu-rebind。",
+      en: "Use --feishu-rebind to change the Feishu destination.",
+    },
+    CLI_NOT_FOUND: {
+      "zh-CN":
+        "缺少随包安装的飞书 CLI，请修复 send-message 依赖安装及原生程序下载。",
+      en: "Bundled Feishu CLI is missing. Repair dependency installation and its native binary download.",
     },
     FEISHU_CONFIGURATION_INVALID: {
       "zh-CN": "飞书应用配置无效。",

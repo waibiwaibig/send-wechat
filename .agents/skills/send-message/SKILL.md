@@ -1,46 +1,41 @@
 ---
 name: send-message
-description: Send text, images, or files when asked to 发微信, 发飞书, or send through WeChat or Feishu; install, configure, pair, diagnose send-message, or configure its Codex notifications and secretary.
+description: Install and connect send-message from its repository link; send text, images, or files when asked to 发微信, 发飞书, or message through WeChat or Feishu; diagnose, pair devices, or configure Codex notifications and secretary.
 ---
 
 # send-message
 
-Use `send-message` with the user's configured channels and fixed recipients.
-The local Hub owns provider credentials. Remote clients forward encrypted requests
-through the user's optional Relay.
+One sender, fixed recipients, independent WeChat and Feishu channels. An omitted
+channel uses the configured default; `both` requires an explicit request. Failure
+never switches channels.
+
+## Install or connect
+
+Read [setup.md](setup.md). Ask WeChat, Feishu, or both, then guide the chosen path
+through user-confirmed receipt. Reuse prior choices and perform machine work yourself;
+the user handles account login, scanning, and approvals. For a bare repository link,
+clarify installation versus explanation. Development/review requests stay in the repo.
 
 ## Send
 
-1. Run `send-message --json status`. Inspect each requested channel separately.
-   For setup or errors read [setup.md](setup.md) and the relevant channel reference:
-   [wechat.md](wechat.md) or [feishu.md](feishu.md).
-2. Send the requested content. Omit `--channel` to use the configured default;
-   use `--channel wechat`, `--channel feishu`, or explicitly requested `--channel both`.
-   - Text: `send-message --json send --stdin`, supplying the exact text through stdin.
-   - Image: `send-message --json send --image PATH`.
-   - File: `send-message --json send --file PATH`.
-3. Read every `result.channels` entry. `accepted` confirms API acceptance only.
-   Preserve the idempotency key during investigation. Unknown results are never
-   automatically resent; an accepted channel must not be repeated to repair another.
+1. Run `send-message --json status`; inspect the requested channel. If unavailable,
+   read [wechat.md](wechat.md) or [feishu.md](feishu.md).
+2. Use `send-message --json send --stdin` for exact text, `--image PATH` for an image,
+   or `--file PATH` for a file. Add `--channel wechat|feishu|both` when requested.
+3. Inspect every `result.channels` entry. `accepted` means API acceptance; device
+   receipt needs separate evidence. Report partial success for `both`. Preserve the
+   idempotency key; investigate unknown results before another send, and never replay
+   an accepted channel to repair a different one.
 
-The user's send request authorizes sending its specified content. Each channel has
-one configured recipient: the QR-bound WeChat user, or the configured Feishu DM/group.
-Changing recipients requires configuration. Never choose another channel after failure.
-For `both`, report partial success explicitly. Device notifications and human receipt
-require separate evidence.
+The user's request authorizes sending the specified content to the configured target.
+Use this sender for delivery, including Feishu; its bundled official CLI is managed
+internally. Recipient changes go through setup and a new binding.
 
-## Installation and optional features
+## Optional features
 
-Read [setup.md](setup.md) for installation, pairing, channel selection, and recovery.
-Ask which channels to install: WeChat, Feishu, or both. Both requires a default channel.
-Install this complete skill directory in each Agent's user-level skill directory on
-all Hub/client devices. npm installation alone does not register an Agent skill.
-Verify discovery in a fresh Agent session separately from CLI readiness.
+After delivery works, offer [Codex notifications](notifications.md) and
+[the Codex secretary](gateway.md) separately. Additional devices use the optional
+Relay described in [setup.md](setup.md). Keep declined features off.
 
-After basic delivery works, offer Codex task notifications and the Codex secretary as
-separate opt-in features. Reuse existing consent. See [gateway.md](gateway.md) for
-secretary setup and [notifications.md](notifications.md) for task notifications.
-
-Keep credentials out of argv, logs, committed files, and reports. Use protected stdin
-for Feishu app configuration and short-lived Relay pairing invitations. Perform reset
-only at the user's request and complete its terminal confirmation.
+Keep secrets and live binding/pairing codes out of logs, committed files, and reports.
+Show an installation code only to the installing user. Reset requires the user's request.

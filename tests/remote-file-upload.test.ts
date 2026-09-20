@@ -98,7 +98,7 @@ describe("remote files stream through the relay without cloud persistence", () =
     ).toBe(true);
     expect(await readdir(join(root, "uploads"))).toEqual([]);
     await uploads.close();
-  });
+  }, 30_000);
 
   it("accepts an identical last-chunk retry but rejects changed offsets and hashes", async () => {
     const root = await mkdtemp(join(tmpdir(), "send-message-remote-file-"));

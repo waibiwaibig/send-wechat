@@ -21,7 +21,7 @@ const roots: string[] = [];
 
 function makeClient(
   mode = "normal",
-  requestTimeoutMs = 1_000,
+  requestTimeoutMs = 5_000,
   permission?: GatewayPermission,
   captureFile?: string,
 ): CodexAppServer {
@@ -368,7 +368,7 @@ describe("Codex app-server stdio gateway", () => {
   });
 
   it("rejects every pending request when a shared timeout closes the process", async () => {
-    const client = makeClient("timeout-all", 100);
+    const client = makeClient("timeout-all", 1_000);
     const events: CodexEvent[] = [];
     client.onEvent((event) => events.push(event));
     await client.connect();

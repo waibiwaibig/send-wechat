@@ -1,23 +1,25 @@
-import type { Agent as HttpAgent } from "node:http";
-import { nodeAgentWithSystemProxy } from "../platform/network.js";
-import { fileTypeFromFile } from "file-type";
 import { createReadStream, createWriteStream } from "node:fs";
-import { lstat, rm } from "node:fs/promises";
+import { copyFile, lstat, mkdtemp, rm } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { Readable, Transform } from "node:stream";
+import { Transform } from "node:stream";
+import { fileTypeFromFile } from "file-type";
 
-import * as lark from "@larksuiteoapi/node-sdk";
+import { FeishuCli, FeishuCliError, type FeishuCliRunner } from "./cli.js";
 
-export type FeishuCredentials = {
-  appId: string;
-  appSecret: string;
-};
+export type FeishuClientCli = Pick<FeishuCliRunner, "run" | "subscribe">;
 
-export type FeishuTarget = {
+export type FeishuConfig = {
+  profile: string;
   receiveIdType: "open_id" | "chat_id";
   receiveId: string;
   ownerOpenId: string;
 };
+
+export type FeishuTarget = Pick<
+  FeishuConfig,
+  "receiveIdType" | "receiveId" | "ownerOpenId"
+>;
 
 export type FeishuPayload =
   | { type: "text"; text: string }
@@ -49,124 +51,10 @@ export type FeishuInboundCallback = (
   message: FeishuInboundMessage,
 ) => void | Promise<void>;
 
-type ApiResponse = {
-  code?: unknown;
-  msg?: unknown;
-  data?: {
-    message_id?: unknown;
-    image_key?: unknown;
-    file_key?: unknown;
-  };
-  message_id?: unknown;
-  image_key?: unknown;
-  file_key?: unknown;
-};
-
-type VerifyResponse = ApiResponse;
-
-type FeishuLogger = {
-  error(...args: unknown[]): void;
-  warn(...args: unknown[]): void;
-  info(...args: unknown[]): void;
-  debug(...args: unknown[]): void;
-  trace(...args: unknown[]): void;
-};
-
-type FeishuHttpInstance = typeof lark.defaultHttpInstance;
-
-type FeishuApiClient = {
-  request(payload: {
-    method: "GET";
-    url: string;
-  }): Promise<VerifyResponse | null>;
-  im: {
-    image: {
-      create(payload: {
-        data: { image_type: "message"; image: Buffer | Readable };
-      }): Promise<ApiResponse | null>;
-    };
-    file: {
-      create(payload: {
-        data: {
-          file_type: "stream";
-          file_name: string;
-          file: Buffer | Readable;
-        };
-      }): Promise<ApiResponse | null>;
-    };
-    message: {
-      create(payload: {
-        params: { receive_id_type: "open_id" | "chat_id" };
-        data: {
-          receive_id: string;
-          msg_type: "text" | "image" | "file";
-          content: string;
-          uuid: string;
-        };
-      }): Promise<ApiResponse | null>;
-    };
-    messageResource: {
-      get(payload: {
-        params: { type: string };
-        path: { message_id: string; file_key: string };
-      }): Promise<{
-        getReadableStream(): Readable;
-      }>;
-    };
-  };
-};
-
-type FeishuEventDispatcher = {
-  register(
-    handles: Record<string, (event: unknown) => unknown>,
-  ): FeishuEventDispatcher;
-};
-
-type FeishuWsClient = {
-  start(params: { eventDispatcher: FeishuEventDispatcher }): Promise<void>;
-  close(params?: { force?: boolean }): void;
-};
-
-export type FeishuSdkFactory = {
-  Client: new (params: {
-    appId: string;
-    appSecret: string;
-    logger?: FeishuLogger;
-    httpInstance?: FeishuHttpInstance;
-  }) => FeishuApiClient;
-  EventDispatcher: new (
-    params?: Record<string, unknown>,
-  ) => FeishuEventDispatcher;
-  WSClient: new (params: {
-    appId: string;
-    appSecret: string;
-    autoReconnect?: boolean;
-    agent?: HttpAgent;
-    logger?: FeishuLogger;
-    httpInstance?: FeishuHttpInstance;
-  }) => FeishuWsClient;
-};
-
-const silentLogger: FeishuLogger = {
-  error: () => undefined,
-  warn: () => undefined,
-  info: () => undefined,
-  debug: () => undefined,
-  trace: () => undefined,
-};
-
-const defaultSdk: FeishuSdkFactory = {
-  Client: lark.Client as unknown as FeishuSdkFactory["Client"],
-  EventDispatcher:
-    lark.EventDispatcher as unknown as FeishuSdkFactory["EventDispatcher"],
-  WSClient: lark.WSClient as unknown as FeishuSdkFactory["WSClient"],
-};
-
 const MAX_TEXT_LENGTH = 4000;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_FILE_BYTES = 30 * 1024 * 1024;
 const MAX_RESOURCE_BYTES = 100 * 1024 * 1024;
-const API_TIMEOUT_MS = 10_000;
 
 const rejected = (code: string): FeishuSendResult => ({
   status: "rejected",
@@ -183,37 +71,21 @@ const unknown = (code: string): FeishuSendResult => ({
   code,
 });
 
-function responseCode(response: ApiResponse | null): number | null {
-  return typeof response?.code === "number" && Number.isInteger(response.code)
-    ? response.code
-    : null;
-}
-
-function safeApiCode(response: ApiResponse | null): string | null {
-  const code = responseCode(response);
-  if (code === null || code === 0) return null;
-  return `FEISHU_${code}`;
-}
-
-function safeThrownApiCode(error: unknown): string | null {
-  if (error === null || typeof error !== "object") return null;
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "number" && Number.isInteger(code)
-    ? `FEISHU_${code}`
-    : null;
-}
-
 function codedError(code: string): Error & { code: string } {
   const error = new Error(code) as Error & { code: string };
   error.code = code;
   return error;
 }
 
-function isValidNonEmptyString(value: unknown): value is string {
+function validString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function parseContent(value: string): Record<string, unknown> | null {
+function parseObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string")
+    return value !== null && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : null;
   try {
     const parsed: unknown = JSON.parse(value);
     return parsed !== null && typeof parsed === "object"
@@ -224,9 +96,60 @@ function parseContent(value: string): Record<string, unknown> | null {
   }
 }
 
-function receivedAt(createTime: string | undefined): number {
-  const milliseconds = createTime === undefined ? NaN : Number(createTime);
-  return Number.isFinite(milliseconds) ? milliseconds : Date.now();
+function receivedAt(value: unknown): number {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  return typeof parsed === "number" && Number.isFinite(parsed)
+    ? parsed
+    : Date.now();
+}
+
+function apiCode(error: unknown): string | null {
+  const code =
+    error instanceof FeishuCliError
+      ? error.code
+      : error !== null && typeof error === "object"
+        ? (error as { code?: unknown }).code
+        : undefined;
+  if (typeof code === "string" && /^FEISHU_[A-Z0-9_]+$/.test(code))
+    return /^FEISHU_\d+$/.test(code) &&
+      Number(code.slice("FEISHU_".length)) >= 500 &&
+      Number(code.slice("FEISHU_".length)) < 600
+      ? null
+      : code;
+  return null;
+}
+
+function typedCode(error: unknown): string | null {
+  if (error instanceof FeishuCliError) return error.code;
+  if (error !== null && typeof error === "object") {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && /^[A-Z][A-Z0-9_]{1,80}$/.test(code))
+      return code;
+  }
+  return null;
+}
+
+function safeFileName(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= 120 &&
+    value !== "." &&
+    value !== ".." &&
+    !/[\\/\u0000-\u001f\u007f]/.test(value)
+  );
+}
+
+function messageIdFrom(value: unknown): string | null {
+  if (value !== null && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    if (validString(object.message_id)) return object.message_id;
+    const data = object.data;
+    if (data !== null && typeof data === "object") {
+      const id = (data as Record<string, unknown>).message_id;
+      if (validString(id)) return id;
+    }
+  }
+  return null;
 }
 
 class ByteLimitTransform extends Transform {
@@ -241,51 +164,28 @@ class ByteLimitTransform extends Transform {
     encoding: BufferEncoding,
     callback: (error?: Error | null, data?: Buffer) => void,
   ): void {
-    this.total += Buffer.isBuffer(chunk)
-      ? chunk.length
-      : Buffer.byteLength(chunk, encoding);
+    const buffer = Buffer.isBuffer(chunk)
+      ? chunk
+      : Buffer.from(chunk, encoding);
+    this.total += buffer.length;
     if (this.total > this.limit) {
       callback(new Error("RESOURCE_TOO_LARGE"));
       return;
     }
-    callback(
-      null,
-      Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding),
-    );
+    callback(null, buffer);
   }
 }
 
 export class FeishuClient {
-  private readonly sdk: FeishuSdkFactory;
-  private readonly api: FeishuApiClient;
-  private wsClient: FeishuWsClient | null = null;
+  private readonly cli: FeishuClientCli;
+  private subscription: { close(): void; isOpen?: () => boolean } | null = null;
 
   public constructor(
-    private readonly credentials: FeishuCredentials,
-    private readonly target: FeishuTarget,
-    sdk: FeishuSdkFactory = defaultSdk,
+    private readonly config: FeishuConfig,
+    private readonly stateDir: string,
+    cli?: FeishuClientCli,
   ) {
-    this.sdk = sdk;
-    if (sdk === defaultSdk) {
-      lark.defaultHttpInstance.defaults.timeout = API_TIMEOUT_MS;
-      lark.defaultHttpInstance.defaults.maxRedirects = 0;
-      lark.defaultHttpInstance.defaults.proxy = false;
-      lark.defaultHttpInstance.defaults.httpAgent = nodeAgentWithSystemProxy();
-      lark.defaultHttpInstance.defaults.httpsAgent = nodeAgentWithSystemProxy();
-    }
-    const clientParams: {
-      appId: string;
-      appSecret: string;
-      logger: FeishuLogger;
-      httpInstance?: FeishuHttpInstance;
-    } = {
-      appId: credentials.appId,
-      appSecret: credentials.appSecret,
-      logger: silentLogger,
-    };
-    if (sdk === defaultSdk)
-      clientParams.httpInstance = lark.defaultHttpInstance;
-    this.api = new sdk.Client(clientParams);
+    this.cli = cli ?? new FeishuCli(stateDir, config.profile);
   }
 
   public async send(
@@ -294,94 +194,72 @@ export class FeishuClient {
   ): Promise<FeishuSendResult> {
     const targetError = this.validateTarget();
     if (targetError !== null) return targetError;
-    if (!isValidNonEmptyString(clientId)) return rejected("INVALID_CLIENT_ID");
+    if (!validString(clientId)) return rejected("INVALID_CLIENT_ID");
 
     if (payload.type === "text") {
       if (payload.text.length === 0) return rejected("EMPTY_TEXT");
       if (Array.from(payload.text).length > MAX_TEXT_LENGTH)
         return rejected("TEXT_TOO_LONG");
-      return this.sendMessage(
-        "text",
-        JSON.stringify({ text: payload.text }),
+      return this.sendCommand([
+        "--text",
+        payload.text,
+        "--idempotency-key",
         clientId,
-      );
+      ]);
     }
 
-    const prepared = await this.prepareUpload(payload);
-    if ("status" in prepared) return prepared;
-    const contentKey = prepared.key;
-    const content =
-      payload.type === "image"
-        ? JSON.stringify({ image_key: contentKey })
-        : JSON.stringify({ file_key: contentKey });
-    return this.sendMessage(payload.type, content, clientId);
+    const staged = await this.prepareMedia(payload);
+    if ("status" in staged) return staged;
+    try {
+      const flag = payload.type === "image" ? "--image" : "--file";
+      return await this.sendCommand(
+        [flag, `./${staged.fileName}`, "--idempotency-key", clientId],
+        staged.cwd,
+      );
+    } finally {
+      await rm(staged.directory, { recursive: true, force: true });
+    }
   }
 
-  /** Verify credentials against Feishu's bot identity endpoint without sending a message. */
   public async verify(): Promise<void> {
     const targetError = this.validateTarget();
-    if (targetError !== null) {
+    if (targetError !== null)
       throw codedError(
         "code" in targetError ? targetError.code : "INVALID_TARGET",
       );
-    }
-    let response: VerifyResponse | null;
     try {
-      response = await this.api.request({
-        method: "GET",
-        url: "/open-apis/bot/v3/info",
-      });
+      await this.cli.run(["api", "GET", "/open-apis/bot/v3/info"]);
     } catch (error) {
-      const apiError = safeThrownApiCode(error);
-      throw codedError(apiError ?? "VERIFY_NETWORK_ERROR");
+      const code = typedCode(error);
+      if (code !== null) throw codedError(code);
+      throw codedError("VERIFY_NETWORK_ERROR");
     }
-    const apiResponse = response;
-    const apiError = safeApiCode(apiResponse);
-    if (apiError !== null) throw codedError(apiError);
-    if (responseCode(apiResponse) !== 0)
-      throw codedError("MALFORMED_VERIFY_RESPONSE");
   }
 
   public async startReceiving(callback: FeishuInboundCallback): Promise<void> {
-    if (this.wsClient !== null) return;
-
-    const dispatcher = new this.sdk.EventDispatcher({ logger: silentLogger });
-    dispatcher.register({
-      "im.message.receive_v1": async (event: unknown) => {
-        await this.handleInbound(event, callback);
-      },
-    });
-    const wsParams: {
-      appId: string;
-      appSecret: string;
-      autoReconnect: boolean;
-      agent?: HttpAgent;
-      logger: FeishuLogger;
-      httpInstance?: FeishuHttpInstance;
-    } = {
-      appId: this.credentials.appId,
-      appSecret: this.credentials.appSecret,
-      autoReconnect: true,
-      logger: silentLogger,
-    };
-    if (this.sdk === defaultSdk) {
-      wsParams.httpInstance = lark.defaultHttpInstance;
-      wsParams.agent = nodeAgentWithSystemProxy();
+    if (this.subscription !== null) {
+      if (this.subscription.isOpen?.() ?? true) return;
+      this.subscription.close();
+      this.subscription = null;
     }
-    const wsClient = new this.sdk.WSClient(wsParams);
-    this.wsClient = wsClient;
     try {
-      await wsClient.start({ eventDispatcher: dispatcher });
+      this.subscription = await this.cli.subscribe(async (event) => {
+        await this.handleInbound(event, callback);
+      });
     } catch (error) {
-      this.wsClient = null;
+      this.subscription = null;
       throw error;
     }
   }
 
   public close(): void {
-    const wsClient = this.wsClient;
-    this.wsClient = null;
-    if (wsClient !== null) wsClient.close({ force: true });
+    const subscription = this.subscription;
+    this.subscription = null;
+    subscription?.close();
+  }
+
+  public isReceiving(): boolean {
+    return this.subscription?.isOpen?.() ?? this.subscription !== null;
   }
 
   public async downloadResource(
@@ -390,80 +268,96 @@ export class FeishuClient {
     type: "image" | "file",
     destination: string,
   ): Promise<void> {
-    if (!isValidNonEmptyString(messageId))
-      throw new Error("INVALID_MESSAGE_ID");
-    if (!isValidNonEmptyString(key)) throw new Error("INVALID_RESOURCE_KEY");
-    if (!isValidNonEmptyString(destination))
-      throw new Error("INVALID_DESTINATION");
+    if (!validString(messageId)) throw new Error("INVALID_MESSAGE_ID");
+    if (!validString(key)) throw new Error("INVALID_RESOURCE_KEY");
+    if (!validString(destination)) throw new Error("INVALID_DESTINATION");
 
-    const resource = await this.api.im.messageResource.get({
-      params: { type },
-      path: { message_id: messageId, file_key: key },
-    });
-    const output = createWriteStream(destination, {
-      flags: "wx",
-      mode: 0o600,
-    });
-    let created = false;
-    output.once("open", () => {
-      created = true;
-    });
+    const directory = await mkdtemp(join(this.stateDir, "feishu-download-"));
+    // The upstream shortcut adds a MIME extension when the requested output
+    // has none. Keep an explicit extension so the private path is stable.
+    const outputName = "resource.bin";
+    const outputPath = join(directory, outputName);
     try {
-      await pipeline(
-        resource.getReadableStream(),
-        new ByteLimitTransform(MAX_RESOURCE_BYTES),
-        output,
+      await this.cli.run(
+        [
+          "im",
+          "+messages-resources-download",
+          "--message-id",
+          messageId,
+          "--file-key",
+          key,
+          "--type",
+          type,
+          "--output",
+          `./${outputName}`,
+        ],
+        { cwd: directory },
       );
-    } catch (error) {
-      if (created) await rm(destination, { force: true });
-      throw error;
+      const info = await lstat(outputPath);
+      if (!info.isFile() || info.size > MAX_RESOURCE_BYTES)
+        throw new Error(
+          info.size > MAX_RESOURCE_BYTES
+            ? "RESOURCE_TOO_LARGE"
+            : "RESOURCE_UNREADABLE",
+        );
+      const input = createReadStream(outputPath);
+      const output = createWriteStream(destination, {
+        flags: "wx",
+        mode: 0o600,
+      });
+      let created = false;
+      output.once("open", () => {
+        created = true;
+      });
+      try {
+        await pipeline(
+          input,
+          new ByteLimitTransform(MAX_RESOURCE_BYTES),
+          output,
+        );
+      } catch (error) {
+        if (created) await rm(destination, { force: true });
+        throw error;
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
     }
   }
 
   private validateTarget(): FeishuSendResult | null {
+    if (!validString(this.config.profile)) return failed("INVALID_PROFILE");
     if (
-      !isValidNonEmptyString(this.credentials.appId) ||
-      !isValidNonEmptyString(this.credentials.appSecret)
-    ) {
-      return failed("INVALID_CREDENTIALS");
-    }
-    if (
-      !isValidNonEmptyString(this.target.receiveId) ||
-      !isValidNonEmptyString(this.target.ownerOpenId)
-    ) {
+      !validString(this.config.receiveId) ||
+      !validString(this.config.ownerOpenId)
+    )
       return failed("INVALID_TARGET");
-    }
     return null;
   }
 
-  private async prepareUpload(
+  private async prepareMedia(
     payload: Extract<FeishuPayload, { type: "image" | "file" }>,
-  ): Promise<{ key: string } | FeishuSendResult> {
+  ): Promise<
+    { cwd: string; directory: string; fileName: string } | FeishuSendResult
+  > {
     const limit = payload.type === "image" ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
-    if (
-      !isValidNonEmptyString(payload.stagedPath) ||
-      !isValidNonEmptyString(payload.fileName)
-    ) {
+    if (!validString(payload.stagedPath) || !safeFileName(payload.fileName))
       return rejected("INVALID_MEDIA");
-    }
-    if (!Number.isSafeInteger(payload.byteLength) || payload.byteLength <= 0) {
+    if (!Number.isSafeInteger(payload.byteLength) || payload.byteLength <= 0)
       return rejected("INVALID_MEDIA_SIZE");
-    }
-    if (payload.byteLength > limit) {
+    if (payload.byteLength > limit)
       return rejected(
         payload.type === "image" ? "IMAGE_TOO_LARGE" : "FILE_TOO_LARGE",
       );
-    }
 
-    let fileSize: number;
+    let size: number;
     try {
-      const staged = await lstat(payload.stagedPath);
-      if (!staged.isFile()) return failed("STAGED_FILE_UNREADABLE");
-      fileSize = staged.size;
+      const info = await lstat(payload.stagedPath);
+      if (!info.isFile()) return failed("STAGED_FILE_UNREADABLE");
+      size = info.size;
     } catch {
       return failed("STAGED_FILE_UNREADABLE");
     }
-    if (fileSize !== payload.byteLength) return rejected("MEDIA_SIZE_MISMATCH");
+    if (size !== payload.byteLength) return rejected("MEDIA_SIZE_MISMATCH");
     if (payload.type === "image") {
       try {
         if (
@@ -477,59 +371,42 @@ export class FeishuClient {
       }
     }
 
-    const file = createReadStream(payload.stagedPath);
+    const cwd = await mkdtemp(join(this.stateDir, "feishu-staging-"));
     try {
-      const response =
-        payload.type === "image"
-          ? await this.api.im.image.create({
-              data: { image_type: "message", image: file },
-            })
-          : await this.api.im.file.create({
-              data: { file_type: "stream", file_name: payload.fileName, file },
-            });
-      const apiError = safeApiCode(response);
-      if (apiError !== null) return rejected(apiError);
-      const key =
-        payload.type === "image" ? response?.image_key : response?.file_key;
-      return isValidNonEmptyString(key)
-        ? { key }
-        : failed("MALFORMED_UPLOAD_RESPONSE");
-    } catch (error) {
-      const apiError = safeThrownApiCode(error);
-      if (apiError !== null) return rejected(apiError);
-      return failed("UPLOAD_FAILED");
-    } finally {
-      file.destroy();
+      await copyFile(payload.stagedPath, join(cwd, basename(payload.fileName)));
+    } catch {
+      await rm(cwd, { recursive: true, force: true });
+      return failed("STAGED_FILE_UNREADABLE");
     }
+    return { cwd, directory: cwd, fileName: basename(payload.fileName) };
   }
 
-  private async sendMessage(
-    type: "text" | "image" | "file",
-    content: string,
-    clientId: string,
+  private async sendCommand(
+    args: string[],
+    cwd?: string,
   ): Promise<FeishuSendResult> {
+    const command = [
+      "im",
+      "+messages-send",
+      this.config.receiveIdType === "open_id" ? "--user-id" : "--chat-id",
+      this.config.receiveId,
+      ...args,
+    ];
     try {
-      const response = await this.api.im.message.create({
-        params: { receive_id_type: this.target.receiveIdType },
-        data: {
-          receive_id: this.target.receiveId,
-          msg_type: type,
-          content,
-          uuid: clientId,
-        },
-      });
-      const apiError = safeApiCode(response);
-      if (apiError !== null) return rejected(apiError);
-      if (responseCode(response) !== 0)
-        return unknown("MALFORMED_SEND_RESPONSE");
-      const messageId = response?.data?.message_id;
-      return isValidNonEmptyString(messageId)
-        ? { status: "accepted", clientMessageId: messageId }
-        : unknown("MALFORMED_SEND_RESPONSE");
+      const data = await this.cli.run(
+        command,
+        cwd === undefined ? {} : { cwd },
+      );
+      const id = messageIdFrom(data);
+      return id === null
+        ? unknown("MALFORMED_SEND_RESPONSE")
+        : { status: "accepted", clientMessageId: id };
     } catch (error) {
-      const apiError = safeThrownApiCode(error);
-      if (apiError !== null) return rejected(apiError);
-      return unknown("NETWORK_RESULT_UNKNOWN");
+      const serverCode = apiCode(error);
+      if (serverCode !== null) return rejected(serverCode);
+      return unknown(
+        error instanceof FeishuCliError ? error.code : "NETWORK_RESULT_UNKNOWN",
+      );
     }
   }
 
@@ -538,77 +415,72 @@ export class FeishuClient {
     callback: FeishuInboundCallback,
   ): Promise<void> {
     if (event === null || typeof event !== "object") return;
-    const candidate = event as {
-      sender?: { sender_id?: { open_id?: string } };
-      message?: {
-        message_id?: string;
-        chat_id?: string;
-        chat_type?: string;
-        message_type?: string;
-        content?: string;
-        create_time?: string;
-      };
-    };
-    const senderId = candidate.sender?.sender_id?.open_id;
-    const message = candidate.message;
-    if (
-      !isValidNonEmptyString(senderId) ||
-      senderId !== this.target.ownerOpenId ||
-      message === undefined
-    )
+    const flat = event as Record<string, unknown>;
+    if (flat.type !== "im.message.receive_v1" || flat.sender_type !== "user")
       return;
-    if (this.target.receiveIdType === "chat_id") {
-      if (
-        message.chat_type !== "group" ||
-        message.chat_id !== this.target.receiveId
-      )
+    if (flat.sender_id !== this.config.ownerOpenId) return;
+    if (this.config.receiveIdType === "chat_id") {
+      if (flat.chat_type !== "group" || flat.chat_id !== this.config.receiveId)
         return;
-    } else if (message.chat_type !== "p2p") {
-      return;
-    }
-    if (
-      !isValidNonEmptyString(message.message_id) ||
-      !isValidNonEmptyString(message.content)
-    )
-      return;
+    } else if (flat.chat_type !== "p2p") return;
+    const id = flat.message_id;
+    const type = flat.message_type;
+    if (!validString(id) || !id.startsWith("om_") || !validString(type)) return;
 
-    const content = parseContent(message.content);
-    if (content === null) return;
-    const attachments: FeishuInboundAttachment[] = [];
-    let text = "";
-    if (message.message_type === "text" && typeof content.text === "string") {
-      text = content.text;
-    } else if (
-      message.message_type === "image" &&
-      isValidNonEmptyString(content.image_key)
-    ) {
-      attachments.push({
-        type: "image",
-        key: content.image_key,
-        fileName: "image",
+    if (type === "text") {
+      if (typeof flat.content !== "string") return;
+      await callback({
+        id,
+        text: flat.content,
+        receivedAt: receivedAt(flat.create_time),
+        attachments: [],
       });
-    } else if (
-      message.message_type === "file" &&
-      isValidNonEmptyString(content.file_key)
-    ) {
-      attachments.push({
-        type: "file",
-        key: content.file_key,
-        fileName:
-          typeof content.file_name === "string"
-            ? content.file_name
-                .replace(/[\\/\u0000-\u001f\u007f]/g, "_")
-                .slice(0, 120) || "file"
-            : "file",
-      });
-    } else {
       return;
     }
+    if (type !== "image" && type !== "file") return;
+
+    const raw = await this.cli.run([
+      "api",
+      "GET",
+      `/open-apis/im/v1/messages/${encodeURIComponent(id)}`,
+    ]);
+    const body = findMessageBody(raw);
+    const content = parseObject(body?.content);
+    if (content === null) return;
+    const key = type === "image" ? content.image_key : content.file_key;
+    if (!validString(key)) return;
+    const fileName =
+      typeof content.file_name === "string" && safeFileName(content.file_name)
+        ? content.file_name
+        : type === "image"
+          ? "image"
+          : "file";
     await callback({
-      id: message.message_id,
-      text,
-      receivedAt: receivedAt(message.create_time),
-      attachments,
+      id,
+      text: "",
+      receivedAt: receivedAt(flat.create_time),
+      attachments: [{ type, key, fileName }],
     });
   }
+}
+
+function findMessageBody(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object") return null;
+  const object = value as Record<string, unknown>;
+  const body = object.body;
+  if (body !== null && typeof body === "object")
+    return body as Record<string, unknown>;
+  const data = object.data;
+  if (data !== null && typeof data === "object") {
+    const dataObject = data as Record<string, unknown>;
+    const itemBody = findMessageBody(dataObject.item);
+    if (itemBody !== null) return itemBody;
+    const items = dataObject.items;
+    if (Array.isArray(items)) return findMessageBody(items[0]);
+  }
+  const itemBody = findMessageBody(object.item);
+  if (itemBody !== null) return itemBody;
+  const items = object.items;
+  if (Array.isArray(items)) return findMessageBody(items[0]);
+  return null;
 }

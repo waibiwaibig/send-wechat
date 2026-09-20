@@ -9,14 +9,16 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resetLocalClientData, resetOwnerData } from "../src/daemon/reset.js";
+import { FeishuCli } from "../src/feishu/cli.js";
 import type { PlatformPaths } from "../src/platform/paths.js";
 
 const roots: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   const { rm } = await import("node:fs/promises");
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
@@ -232,6 +234,107 @@ describe("owner reset", () => {
         relayCredentialStore: { delete: async () => undefined },
       }),
     ).rejects.toThrow("keychain");
+  });
+
+  it("resets a Feishu-only local installation without touching native stores", async () => {
+    const root = await mkdtemp(join(tmpdir(), "send-message-reset-feishu-"));
+    roots.push(root);
+    const fixture = paths(root);
+    await mkdir(fixture.stateDir, { recursive: true, mode: 0o700 });
+    await mkdir(fixture.logDir, { recursive: true, mode: 0o700 });
+    await mkdir(fixture.runDir, { recursive: true, mode: 0o700 });
+    await writeFile(
+      fixture.installationFile,
+      JSON.stringify({ schemaVersion: 1, role: "local" }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      join(fixture.stateDir, "channels.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        defaultChannel: "feishu",
+        channels: ["feishu"],
+      }),
+      { mode: 0o600 },
+    );
+    await writeFile(fixture.stateFile, "state");
+    await writeFile(fixture.idempotencyFile, "ledger");
+    await writeFile(join(fixture.logDir, "send.log"), "log");
+    await writeFile(join(fixture.runDir, "socket"), "socket");
+    await writeFile(fixture.serviceConfigPath, "service");
+
+    const removeProfile = vi
+      .spyOn(FeishuCli.prototype, "removeProfile")
+      .mockResolvedValue(undefined);
+    const nativeDelete = vi.fn(async () => {
+      throw new Error("native keyring must not be used");
+    });
+    const relayDelete = vi.fn(async () => {
+      throw new Error("relay keyring must not be used");
+    });
+
+    await resetOwnerData(fixture, {
+      credentialStore: { delete: nativeDelete },
+      relayCredentialStore: { delete: relayDelete },
+    });
+
+    expect(removeProfile).toHaveBeenCalledTimes(1);
+    expect(nativeDelete).not.toHaveBeenCalled();
+    expect(relayDelete).not.toHaveBeenCalled();
+    await expect(lstat(fixture.installationFile)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      lstat(join(fixture.stateDir, "channels.json")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(lstat(fixture.stateFile)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(lstat(fixture.idempotencyFile)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(fixture.serviceConfigPath, "utf8")).resolves.toBe(
+      "service",
+    );
+  });
+
+  it("preserves owner state when Feishu profile removal fails", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "send-message-reset-feishu-error-"),
+    );
+    roots.push(root);
+    const fixture = paths(root);
+    await mkdir(fixture.stateDir, { recursive: true, mode: 0o700 });
+    await writeFile(
+      fixture.installationFile,
+      JSON.stringify({ schemaVersion: 1, role: "local" }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      join(fixture.stateDir, "channels.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        defaultChannel: "feishu",
+        channels: ["feishu"],
+      }),
+      { mode: 0o600 },
+    );
+    await writeFile(fixture.stateFile, "state");
+    const profileError = new Error("profile removal failed");
+    vi.spyOn(FeishuCli.prototype, "removeProfile").mockRejectedValue(
+      profileError,
+    );
+
+    await expect(resetOwnerData(fixture)).rejects.toBe(profileError);
+    await expect(readFile(fixture.installationFile, "utf8")).resolves.toContain(
+      '"role":"local"',
+    );
+    await expect(
+      readFile(join(fixture.stateDir, "channels.json"), "utf8"),
+    ).resolves.toContain('"feishu"');
+    await expect(readFile(fixture.stateFile, "utf8")).resolves.toBe("state");
   });
 
   it.skipIf(process.platform === "win32")(

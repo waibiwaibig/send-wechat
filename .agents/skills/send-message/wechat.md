@@ -1,8 +1,17 @@
 # WeChat channel
 
 WeChat uses the QR-bound account through the pinned Tencent iLink protocol.
-Run `send-message setup --channels wechat` and display the generated QR. The user
-must scan, complete any verification, and send an initial message to the bot.
+The Agent runs `send-message setup --channels wechat` on the authorized machine and
+shows the generated QR to the user. Keep a dual-channel selection when both was chosen.
+Guide one action at a time: scan with the intended WeChat account, complete any provider
+verification, then send an initial message to the bot in WeChat. If a QR expires, obtain
+a fresh one through the CLI and explain that the prior QR is no longer the one to scan.
+
+Checkpoint: setup succeeded and status shows fresh bound-user context. Continue with
+[setup.md](setup.md)'s authorized test and user-confirmed receipt. If QR rendering or
+verification is blocked, report the actual prompt/error and help complete that step;
+do not stop after printing an installation command. The bot target is the QR-bound
+user, not an arbitrary desktop contact or group selected by the Agent.
 
 Session state is specific to WeChat. A fresh inbound message refreshes context;
 after 23 hours the local renewal reminder is due, and at 24 hours sending is blocked.

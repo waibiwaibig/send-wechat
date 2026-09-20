@@ -45,14 +45,17 @@ the local reminder is due at 23 hours and sending blocks at 24 hours. `/recover`
 handled by the Hub. Upstream rejection can still occur during a locally valid session.
 Image/file downloads use the pinned encrypted CDN protocol and fixed official origin.
 
-Feishu uses `@larksuiteoapi/node-sdk` for self-built-app credentials, message/resource
-APIs, and long-connection events. Its configured app permissions, target availability,
+Feishu uses pinned `@larksuite/cli` subprocesses for app creation, credentials,
+message/resource APIs and long-connection events. A one-use challenge binds the owner
+and destination automatically. CLI credentials live in its isolated Hub profile. Its configured app permissions, target availability,
 API quotas and group membership apply independently of WeChat session policy.
 Custom Webhooks do not satisfy the full product contract.
 
 ## Trust and lifecycle
 
-Provider credentials remain in native Hub credential storage. Nonsecret configuration
+WeChat/Relay credentials remain in native Hub credential storage. Feishu credentials
+are owned by the official CLI (native storage on macOS/Windows, encrypted local files
+on Linux). Nonsecret configuration
 and ledgers are owner-only. Remote clients retain only their device credential.
 Relay traffic is authenticated and encrypted; Relay has no durable outgoing queue.
 An offline Hub returns failure. Temporary outgoing uploads are cleaned after delivery.
@@ -76,5 +79,6 @@ notification settings, or end-to-end secretary delivery. Packaging must include 
 channel references and all linked files in the unified skill directory.
 
 The accepted unified product decision is [ADR 0009](docs/adr/0009-unified-messaging.md).
+Feishu transport and onboarding are defined by [ADR 0010](docs/adr/0010-feishu-official-cli.md).
 Earlier ADRs describe the original WeChat implementation; where scope differs,
 ADR 0009 governs the current product and source implementation.

@@ -1,7 +1,7 @@
 import { AttachmentStore } from "../messaging/attachments.js";
 import {
   MessageConfigStore,
-  FeishuCredentialStore,
+  FeishuConfigurationStore,
 } from "../messaging/config.js";
 import { ChannelRouter } from "../messaging/channel-router.js";
 import { FeishuClient, type FeishuInboundMessage } from "../feishu/client.js";
@@ -128,12 +128,14 @@ export async function startProductionDaemon(
     },
   });
   const feishuSecret = configuration.channels.includes("feishu")
-    ? await new FeishuCredentialStore().load()
+    ? await new FeishuConfigurationStore(paths.stateDir).load()
     : null;
   if (configuration.channels.includes("feishu") && feishuSecret === null)
     throw new Error("FEISHU_CONFIGURATION_REQUIRED");
   const feishu =
-    feishuSecret === null ? null : new FeishuClient(feishuSecret, feishuSecret);
+    feishuSecret === null
+      ? null
+      : new FeishuClient(feishuSecret, paths.stateDir);
   const feishuInbox = new SqliteTextInbox(
     join(paths.stateDir, "feishu-inbox.sqlite"),
   );
@@ -275,7 +277,7 @@ export async function startProductionDaemon(
       .then(async () => {
         if (feishu === null || abort.signal.aborted) return;
         const active = feishuInbox.isActive();
-        if (active && !receiving) {
+        if (active && (!receiving || !feishu.isReceiving())) {
           await feishu.startReceiving(receiveFeishu);
           receiving = true;
         } else if (!active && receiving) {

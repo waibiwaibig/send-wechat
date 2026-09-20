@@ -23,8 +23,7 @@ function validFeishu(
   overrides: Partial<FeishuConfiguration> = {},
 ): FeishuConfiguration {
   return {
-    appId: "cli_test123",
-    appSecret: "secret",
+    profile: "send-message",
     receiveIdType: "open_id",
     receiveId: "ou_owner123",
     ownerOpenId: "ou_owner123",

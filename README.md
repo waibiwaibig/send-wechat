@@ -1,12 +1,18 @@
 # send-message
 
 让 Codex、Claude Code 或其他终端 Agent，把文字、图片和文件发到微信或飞书。
-安装时选择微信、飞书，或两者都装；双渠道安装再选择默认渠道。直接把仓库交给 AI：
+把这个仓库链接发给有终端能力的 AI，即可开始引导：
 
-> 请安装并设置 https://github.com/waibiwaibig/send-wechat。
-> 先问我要装微信、飞书还是两者，再确定默认渠道和是否需要多设备。
-> 在每台设备上安装统一的全局 send-message skill。
-> 基础发送验证后，分别问我是否启用 Codex 任务通知和 Codex 秘书。
+> https://github.com/waibiwaibig/send-wechat
+
+AI 会确认你要安装微信、飞书还是两者，并与你配合完成安装、账号配置和测试收信。
+飞书接入使用随包安装的官方 CLI：你扫码创建应用，再给机器人发送一次绑定码。
+无需手动查 open_id 或复制应用密钥；AI 负责环境检查、安装、配置和排错，必要时引导管理员审批。
+
+**给接手的 AI：**若用户希望安装或连接，请先读取
+[send-message skill](.agents/skills/send-message/SKILL.md)，再按
+[完整安装流程](.agents/skills/send-message/setup.md)执行，直到用户确认收到测试消息。
+仅有链接时先确认用途；用户要求阅读、评审或开发仓库时，按该任务执行。
 
 项目非官方，项目方不运营公共消息服务。GitHub 仓库地址暂保留原名。
 
@@ -30,15 +36,16 @@ Codex 可使用 `~/.agents/skills/send-message/`，Claude Code 使用
 
 ## 选择渠道
 
-| 渠道 | 接入方式       | 固定目标               | 主要限制                                 |
-| ---- | -------------- | ---------------------- | ---------------------------------------- |
-| 微信 | 扫码绑定 iLink | 扫码绑定的用户         | 入站上下文、会话时限及上游主动消息限制   |
-| 飞书 | 自建应用机器人 | 自己的私聊或指定通知群 | 应用权限、发布范围、群成员资格、API 配额 |
+| 渠道 | 接入方式            | 固定目标               | 主要限制                                 |
+| ---- | ------------------- | ---------------------- | ---------------------------------------- |
+| 微信 | 扫码绑定 iLink      | 扫码绑定的用户         | 入站上下文、会话时限及上游主动消息限制   |
+| 飞书 | 官方 CLI 应用机器人 | 自己的私聊或指定通知群 | 应用权限、发布范围、群成员资格、API 配额 |
 
 微信：`send-message setup --channels wechat`。扫码后给 bot 发第一条消息。
-飞书：`send-message setup --channels feishu --feishu-config-stdin`。
+飞书：`send-message setup --channels feishu`。
 双渠道使用 `--channels both --default-channel wechat|feishu`。
-飞书应用配置通过标准输入传入，字段和权限见 [飞书指南](.agents/skills/send-message/feishu.md)。
+飞书默认绑定自己的私聊；指定通知群时加 `--feishu-target group`。
+更换目标使用 `setup --feishu-rebind`，按新绑定码确认。完整步骤见 [飞书指南](.agents/skills/send-message/feishu.md)。
 已有自定义 Webhook 需要改为应用机器人，才能使用本工具的文件发送和双向秘书能力。
 
 单台电脑直接使用本地服务，不需要 Cloudflare。多台电脑共用一个常在线 Hub 时，

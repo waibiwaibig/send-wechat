@@ -409,8 +409,11 @@ export async function runCommand(
         ...(optionsWithPair.defaultChannel === undefined
           ? {}
           : { defaultChannel: optionsWithPair.defaultChannel }),
-        ...(optionsWithPair.feishuConfigStdin === true
-          ? { feishuConfigStdin: true }
+        ...(optionsWithPair.feishuTarget === undefined
+          ? {}
+          : { feishuTarget: optionsWithPair.feishuTarget }),
+        ...(optionsWithPair.feishuRebind === true
+          ? { feishuRebind: true }
           : {}),
         ...(optionsWithPair.relay === true ? { relay: true } : {}),
         ...(pair === undefined ? {} : { pair }),

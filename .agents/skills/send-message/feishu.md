@@ -1,35 +1,61 @@
-# Feishu channel
+# Feishu: scan, bind, verify
 
-Use a self-built Feishu application with bot capability. A custom group Webhook does
-not provide the application credentials, file API, or inbound events this product uses.
+Feishu uses the bundled official `@larksuite/cli` as the application bot. All sending,
+receiving and resource transfers go through that CLI. Use `send-message` commands;
+setup owns an isolated CLI profile, so a separate global `lark-cli` configuration does
+not configure this sender. No App Secret, open_id or chat_id needs to be pasted into chat.
 
-1. Create the application in the Feishu developer console and enable its bot.
-2. Grant message sending (`im:message:send_as_bot`) and resource access (`im:resource`).
-   For the secretary, subscribe to `im.message.receive_v1` using the long-connection
-   mode and grant the relevant private-message or group-mention read permission.
-3. Publish the app, include the owner in its availability scope, and add it to the
-   selected notification group when using a group.
-4. Securely provide JSON through `setup --channels feishu --feishu-config-stdin`:
-   `appId`, `appSecret`, `receiveIdType` (`open_id` or `chat_id`), `receiveId`,
-   and the installer's `ownerOpenId`. For DM, receiveId must equal ownerOpenId.
-   Ask the user to enter secrets directly into protected input; keep them out of chat
-   and command arguments. The Hub saves this configuration in native credential storage.
-5. Run doctor and a user-authorized test. API acceptance, event subscription, and
-   device notification are three separate checks.
+## Connect
 
-Text is bounded to 4,000 Unicode characters, images to 10 MiB, files to 30 MiB.
-Feishu has API rate limits and plan quotas; it is not an unlimited channel. API limits
-and permissions may change: consult the linked official API sections when diagnosing.
-The product does not apply WeChat's local 24-hour session gate to Feishu.
+1. Default to the user's private bot conversation. If a group is requested, add
+   `--feishu-target group` to setup. Keep the channel/default choices from [setup.md](setup.md).
+2. Run `send-message setup --channels feishu` (or the selected dual-channel command).
+   Keep the process running and show its official app-creation link/QR to the user.
+   They log in/scan and create a dedicated send-message app. The CLI saves its credentials.
+   Existing configured bindings are verified and reused when setup is rerun.
+3. Wait for **连接已就绪** and the binding code. Show the bot name and code. For private
+   delivery, the user searches for that bot in Feishu, opens its chat and sends only the
+   code. For a group, they add the bot, then send **@bot followed by the code** in that
+   group. The installing user sends it personally. The code expires after ten minutes.
+4. Wait for **接收人已绑定** and successful setup. Return to [setup.md](setup.md)'s
+   delivery test. Verify text, and requested image/file delivery, in that exact chat.
 
-The secretary accepts only the configured owner's open_id. In a group it additionally
-requires the configured chat_id; availability in a group does not authorize other
-members to control Codex. Use @bot for group commands with mention-scoped permissions.
+The application identity sends messages to the user. Personal `auth login --recommend`
+is unnecessary for this flow. Bot permissions, application availability, administrator
+approval and API quotas still apply. App creation and recipient binding are separate
+checkpoints; presenting a scan link alone does not complete either.
 
-References:
+## Resume or change the target
 
-- [Send message](https://open.feishu.cn/document/server-docs/im-v1/message/create): prerequisites, permissions, rate limits, receive_id_type.
-- [Upload image](https://open.feishu.cn/document/server-docs/im-v1/image/create): request body and image size constraints.
-- [Upload file](https://open.feishu.cn/document/server-docs/im-v1/file/create): file_type, file_name, and file size constraints.
-- [Receive message](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive): sender identity, message resources, and deduplication by message_id.
-- [Official Node SDK](https://github.com/larksuite/node-sdk#long-connection): local WebSocket event subscription.
+After timeout, rerun setup: it reuses the stored CLI profile and generates a fresh code.
+For an intentional recipient change, run `send-message setup --feishu-rebind`, adding
+`--feishu-target group` or `--feishu-target dm` for the desired mode. The previous binding
+is retained until a valid new challenge is received. A new group binding also fixes the
+owner whose messages may reach the optional secretary.
+
+## Repair only the failing checkpoint
+
+- **CLI missing/install failure:** repair the package installation and its native-binary
+  download. Use the version pinned by this sender; arbitrary global CLI upgrades are
+  outside its tested contract.
+- **Scan link expired:** rerun setup and show the new link. An approval pending in the
+  user's organization must finish before claiming success.
+- **Bot missing from search/group picker:** check the selected tenant and app availability
+  in the developer console; guide pending publication/admin approval shown there.
+- **No binding prompt / incoming event permission error:** check the app's robot capability,
+  message-receive event and long-connection configuration. Newly created smart-agent apps
+  preconfigure these; an existing app may need correction. Show the exact failed
+  permission and the next console action. No public callback server is needed.
+- **Code ignored:** use the current code in the selected chat type. A group message needs
+  exactly one mention of this bot, followed by the code, sent by the intended owner.
+- **Send rejected:** check the reported API code, target availability/group membership,
+  send-as-bot permission and resource permission for media. Keep the same channel.
+- **Unknown send outcome:** investigate the conversation before another send.
+
+Text is locally limited to 4,000 characters; images to 10 MiB and files to 30 MiB.
+The [secretary](gateway.md) is optional and accepts only the bound owner's messages.
+
+Official references, read only when that checkpoint needs detail:
+[app creation — configuration checklist](https://open.feishu.cn/document/mcp_open_tools/integrating-agents-with-feishu/overview.md),
+[CLI send — parameters/identity](https://github.com/larksuite/cli/blob/main/skills/lark-im/references/lark-im-messages-send.md),
+[CLI events — subprocess contract](https://github.com/larksuite/cli/blob/main/skills/lark-event/SKILL.md).

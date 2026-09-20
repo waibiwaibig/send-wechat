@@ -44,11 +44,7 @@ export class MessageConfigStore {
 
 export const feishuConfigurationSchema = z
   .strictObject({
-    appId: z
-      .string()
-      .regex(/^cli_[A-Za-z0-9]+$/)
-      .max(128),
-    appSecret: z.string().min(1).max(4096),
+    profile: z.literal("send-message"),
     receiveIdType: z.enum(["open_id", "chat_id"]),
     receiveId: z.string().min(1).max(256),
     ownerOpenId: z
@@ -63,23 +59,15 @@ export const feishuConfigurationSchema = z
   );
 export type FeishuConfiguration = z.infer<typeof feishuConfigurationSchema>;
 
-export class FeishuCredentialStore {
-  private async entry() {
-    const { Entry } = await import("@napi-rs/keyring");
-    return new Entry("send-message", "feishu");
+export class FeishuConfigurationStore {
+  private readonly path: string;
+  constructor(stateDir: string) {
+    this.path = join(stateDir, "feishu.json");
   }
-  async load(): Promise<FeishuConfiguration | null> {
-    const raw = (await this.entry()).getPassword();
-    if (raw == null) return null;
-    if (raw.length > 8192) throw new Error("FEISHU_CREDENTIAL_INVALID");
-    return feishuConfigurationSchema.parse(JSON.parse(raw));
+  load(): Promise<FeishuConfiguration | null> {
+    return readPrivateJson(this.path, feishuConfigurationSchema);
   }
-  async save(value: FeishuConfiguration): Promise<void> {
-    (await this.entry()).setPassword(
-      JSON.stringify(feishuConfigurationSchema.parse(value)),
-    );
-  }
-  async delete(): Promise<void> {
-    (await this.entry()).deletePassword();
+  save(value: FeishuConfiguration): Promise<void> {
+    return writePrivateJson(this.path, feishuConfigurationSchema, value);
   }
 }

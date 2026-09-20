@@ -1,7 +1,5 @@
-import {
-  FeishuCredentialStore,
-  MessageConfigStore,
-} from "../messaging/config.js";
+import { FeishuCli } from "../feishu/cli.js";
+import { MessageConfigStore } from "../messaging/config.js";
 import { lstat, readdir, rmdir, unlink } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
@@ -96,21 +94,28 @@ export async function resetOwnerData(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
   }
+  const config = await new MessageConfigStore(paths.stateDir).load();
+  const feishuOnlyLocal =
+    installation?.role === "local" &&
+    config?.channels.length === 1 &&
+    config.channels[0] === "feishu";
   const credentialStore =
-    installation?.role === "client"
+    installation?.role === "client" || feishuOnlyLocal
       ? { delete: () => Promise.resolve() }
       : (dependencies.credentialStore ?? new NativeCredentialStore());
   let relayCredentialStore = dependencies.relayCredentialStore;
+  if (feishuOnlyLocal) {
+    relayCredentialStore = { delete: () => Promise.resolve() };
+  }
   if (relayCredentialStore === undefined) {
     relayCredentialStore = selectRelayCredentialStore(
       paths,
       installation?.role === "client" ? "client" : "hub",
     );
   }
-  const config = await new MessageConfigStore(paths.stateDir).load();
   const credentialDeletion = await Promise.allSettled([
     ...(installation?.role !== "client" && config?.channels.includes("feishu")
-      ? [new FeishuCredentialStore().delete()]
+      ? [new FeishuCli(paths.stateDir).removeProfile()]
       : []),
     credentialStore.delete(),
     relayCredentialStore.delete(),

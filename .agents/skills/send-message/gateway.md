@@ -27,8 +27,21 @@ image input; files are staged locally and their paths are supplied for Codex to 
 Attachments are untrusted content, and never authorize new filesystem permissions.
 
 For Feishu groups, the selected chat and installer open_id must both match. Follow
-[feishu.md](feishu.md) for event subscriptions and permissions. For WeChat recovery
+[feishu.md](feishu.md) for CLI connection troubleshooting. For WeChat recovery
 follow [wechat.md](wechat.md); its session restrictions also apply to secretary replies.
 
 Check the selected service, incoming message, actual Codex turn, and channel reply
 separately. A running service alone does not establish end-to-end readiness.
+
+## Feishu secretary verification
+
+Complete sending and recipient binding first. The Hub uses the bundled CLI's incoming
+message consumer only while the secretary holds its lease. The smart-agent application
+used by setup preconfigures message events and long connections; no second app, personal
+OAuth login or public callback URL is needed.
+
+Start the selected Feishu gateway, then have the bound owner send an agreed harmless
+instruction in the bound DM, or @mention the bot in the bound group. Verify event receipt,
+a Codex turn, and the reply separately. For permission/event errors, follow
+[feishu.md](feishu.md)'s failing-checkpoint repair. A running service alone does not prove
+that the event subscription or target permissions work.
