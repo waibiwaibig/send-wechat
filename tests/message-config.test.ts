@@ -101,10 +101,12 @@ describe("MessageConfigStore", () => {
     await store.save(config);
 
     await expect(store.load()).resolves.toEqual(config);
-    expect((await lstat(root)).mode & 0o777).toBe(0o700);
-    expect((await lstat(path.join(root, "channels.json"))).mode & 0o777).toBe(
-      0o600,
-    );
+    if (process.platform !== "win32") {
+      expect((await lstat(root)).mode & 0o777).toBe(0o700);
+      expect((await lstat(path.join(root, "channels.json"))).mode & 0o777).toBe(
+        0o600,
+      );
+    }
   });
 
   it("rejects a schema-damaged configuration", async () => {

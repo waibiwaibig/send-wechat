@@ -549,7 +549,9 @@ describe("FeishuClient receiving and resources", () => {
       destination,
     );
     await expect(readFile(destination, "utf8")).resolves.toBe("resource");
-    expect((await stat(destination)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(destination)).mode & 0o777).toBe(0o600);
+    }
     expect(api.im.messageResource.get).toHaveBeenCalledWith({
       params: { type: "file" },
       path: { message_id: "om-message", file_key: "file-key" },
