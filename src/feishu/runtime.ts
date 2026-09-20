@@ -32,6 +32,8 @@ export class FeishuRuntime {
           expiresAt: null,
         },
       };
+    if (command.type !== "send-text")
+      return this.failure(command, "FEISHU_TEXT_ONLY");
     if (this.queued >= 100) return this.failure(command, "BUSY");
     this.queued++;
     const result = this.tail.then(() => this.send(command));
@@ -106,7 +108,7 @@ export class FeishuRuntime {
     await this.ledger.insert(entry);
     let outcome: Awaited<ReturnType<FeishuClient["send"]>>;
     try {
-      const wait = 250 - (Date.now() - this.lastAttemptAt);
+      const wait = 650 - (Date.now() - this.lastAttemptAt);
       if (wait > 0) await delay(wait);
       this.lastAttemptAt = Date.now();
       outcome = await this.client.send(

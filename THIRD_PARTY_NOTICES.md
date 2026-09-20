@@ -43,7 +43,6 @@ Tencent 上游许可证 notice：
 
 | Package                     | Locked version | License           |
 | --------------------------- | -------------: | ----------------- |
-| `@larksuiteoapi/node-sdk`   |       `1.74.0` | MIT               |
 | `@napi-rs/keyring`          |        `1.3.0` | MIT               |
 | `@vscode/os-proxy-resolver` |        `0.4.0` | MIT               |
 | `commander`                 |       `15.0.0` | MIT               |

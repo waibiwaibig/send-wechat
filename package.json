@@ -1,7 +1,7 @@
 {
   "name": "send-message",
   "version": "0.1.0-rc.2",
-  "description": "Send text, images, and files through configured WeChat and Feishu channels.",
+  "description": "Send WeChat text, images, and files, or Feishu group text notifications via Webhook.",
   "keywords": [
     "wechat",
     "weixin",
@@ -66,7 +66,6 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "1.74.0",
     "@napi-rs/keyring": "^1.3.0",
     "@vscode/os-proxy-resolver": "0.4.0",
     "commander": "^15.0.0",

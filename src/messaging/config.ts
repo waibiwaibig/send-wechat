@@ -42,25 +42,19 @@ export class MessageConfigStore {
   }
 }
 
-export const feishuConfigurationSchema = z
-  .strictObject({
-    appId: z
-      .string()
-      .regex(/^cli_[A-Za-z0-9]+$/)
-      .max(128),
-    appSecret: z.string().min(1).max(4096),
-    receiveIdType: z.enum(["open_id", "chat_id"]),
-    receiveId: z.string().min(1).max(256),
-    ownerOpenId: z
-      .string()
-      .regex(/^ou_[A-Za-z0-9_-]+$/)
-      .max(256),
-  })
-  .refine((value) =>
-    value.receiveIdType === "open_id"
-      ? value.receiveId === value.ownerOpenId
-      : /^oc_[A-Za-z0-9_-]+$/.test(value.receiveId),
-  );
+export const feishuConfigurationSchema = z.strictObject({
+  webhookUrl: z
+    .string()
+    .url()
+    .refine(
+      (value) =>
+        /^https:\/\/open\.feishu\.cn\/open-apis\/bot\/v2\/hook\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+          value,
+        ),
+      "Invalid Feishu webhook URL",
+    ),
+  signingSecret: z.string().min(1).max(4096).optional(),
+});
 export type FeishuConfiguration = z.infer<typeof feishuConfigurationSchema>;
 
 export class FeishuCredentialStore {

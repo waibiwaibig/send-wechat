@@ -23,11 +23,8 @@ function validFeishu(
   overrides: Partial<FeishuConfiguration> = {},
 ): FeishuConfiguration {
   return {
-    appId: "cli_test123",
-    appSecret: "secret",
-    receiveIdType: "open_id",
-    receiveId: "ou_owner123",
-    ownerOpenId: "ou_owner123",
+    webhookUrl:
+      "https://open.feishu.cn/open-apis/bot/v2/hook/123e4567-e89b-12d3-a456-426614174000",
     ...overrides,
   };
 }
@@ -61,28 +58,53 @@ describe("message configuration schemas", () => {
     });
   });
 
-  it("requires a Feishu direct message target to equal the owner", () => {
-    expect(() =>
-      feishuConfigurationSchema.parse(
-        validFeishu({ receiveId: "ou_other123" }),
-      ),
-    ).toThrow();
-    expect(feishuConfigurationSchema.parse(validFeishu())).toMatchObject({
-      receiveIdType: "open_id",
-      receiveId: "ou_owner123",
-    });
-  });
-
-  it("accepts only the Feishu group chat id format for group delivery", () => {
+  it("accepts a Feishu webhook URL with an optional signing secret", () => {
+    expect(feishuConfigurationSchema.parse(validFeishu())).toEqual(
+      validFeishu(),
+    );
     expect(
       feishuConfigurationSchema.parse(
-        validFeishu({ receiveIdType: "chat_id", receiveId: "oc_group123" }),
+        validFeishu({ signingSecret: "signing-secret" }),
       ),
-    ).toMatchObject({ receiveIdType: "chat_id", receiveId: "oc_group123" });
+    ).toMatchObject({ signingSecret: "signing-secret" });
+  });
+
+  it("rejects Feishu webhook URLs with the wrong shape", () => {
+    for (const webhookUrl of [
+      "http://open.feishu.cn/open-apis/bot/v2/hook/123e4567-e89b-12d3-a456-426614174000",
+      "https://example.com/open-apis/bot/v2/hook/123e4567-e89b-12d3-a456-426614174000",
+      "https://open.feishu.cn:443/open-apis/bot/v2/hook/123e4567-e89b-12d3-a456-426614174000",
+      "https://user:pass@open.feishu.cn/open-apis/bot/v2/hook/123e4567-e89b-12d3-a456-426614174000",
+      "https://open.feishu.cn/open-apis/bot/v2/hook/123e4567-e89b-12d3-a456-426614174000?x=1",
+      "https://open.feishu.cn/open-apis/bot/v2/hook/123e4567-e89b-12d3-a456-426614174000#fragment",
+      "https://open.feishu.cn/open-apis/bot/v2/hook/not-a-uuid",
+    ]) {
+      expect(() =>
+        feishuConfigurationSchema.parse(validFeishu({ webhookUrl })),
+      ).toThrow();
+    }
+  });
+
+  it("rejects empty or oversized signing secrets", () => {
+    expect(() =>
+      feishuConfigurationSchema.parse(validFeishu({ signingSecret: "" })),
+    ).toThrow();
     expect(() =>
       feishuConfigurationSchema.parse(
-        validFeishu({ receiveIdType: "chat_id", receiveId: "ou_owner123" }),
+        validFeishu({ signingSecret: "x".repeat(4097) }),
       ),
+    ).toThrow();
+  });
+
+  it("rejects the legacy Feishu application configuration fields", () => {
+    expect(() =>
+      feishuConfigurationSchema.parse({
+        ...validFeishu(),
+        appId: "cli_test123",
+        appSecret: "secret",
+        receiveIdType: "open_id",
+        receiveId: "ou_legacy123",
+      }),
     ).toThrow();
   });
 });

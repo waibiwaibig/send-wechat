@@ -49,60 +49,107 @@ describe("daemon request router", () => {
     });
   });
 
-  it("routes text and inbox operations to their selected channels", async () => {
-    const execute = vi.fn(async () => ({ ok: true, command: "send" }));
-    const wechatInbox = {
+  it("rejects every Feishu inbox operation without falling back to the legacy inbox", async () => {
+    const legacyInbox = {
       poll: vi.fn(() => ({ messages: [], overflow: false })),
       ack: vi.fn(),
       release: vi.fn(),
     };
-    const feishuInbox = {
-      poll: vi.fn(() => ({
-        messages: [{ id: "feishu-1", text: "hello", receivedAt: 1 }],
-        overflow: false,
-      })),
-      ack: vi.fn(),
-      release: vi.fn(),
-    };
+    const router = new DaemonRequestRouter({
+      runtime: { execute: vi.fn() },
+      login: { login: vi.fn() },
+      withPollingPaused: async (operation) => operation(),
+      doctor: async () => ({ credentialStore: "available" }),
+      issuePairingInvitation: () => "sw1.invitation",
+      inbox: legacyInbox,
+    });
+    const context = { emit: vi.fn(), requestVerifyCode: vi.fn() };
+
+    await expect(
+      router.handle(
+        {
+          command: "inbox_poll",
+          requestId: "feishu-poll",
+          consumerId: "gateway",
+          channel: "feishu",
+        },
+        context,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "INBOX_UNAVAILABLE", retryable: false },
+    });
+    await expect(
+      router.handle(
+        {
+          command: "inbox_ack",
+          requestId: "feishu-ack",
+          consumerId: "gateway",
+          ids: ["message-1"],
+          channel: "feishu",
+        },
+        context,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "INBOX_UNAVAILABLE", retryable: false },
+    });
+    await expect(
+      router.handle(
+        {
+          command: "inbox_release",
+          requestId: "feishu-release",
+          consumerId: "gateway",
+          channel: "feishu",
+        },
+        context,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "INBOX_UNAVAILABLE", retryable: false },
+    });
+    expect(legacyInbox.poll).not.toHaveBeenCalled();
+    expect(legacyInbox.ack).not.toHaveBeenCalled();
+    expect(legacyInbox.release).not.toHaveBeenCalled();
+  });
+
+  it("routes an explicit Feishu text send to the runtime", async () => {
+    const execute = vi.fn(async () => ({
+      ok: true,
+      command: "send",
+      requestId: "feishu-text",
+    }));
     const router = new DaemonRequestRouter({
       runtime: { execute },
       login: { login: vi.fn() },
       withPollingPaused: async (operation) => operation(),
       doctor: async () => ({ credentialStore: "available" }),
       issuePairingInvitation: () => "sw1.invitation",
-      inboxes: { wechat: wechatInbox, feishu: feishuInbox },
     });
-    const context = { emit: vi.fn(), requestVerifyCode: vi.fn() };
 
-    await router.handle(
-      {
-        command: "send_text",
-        requestId: "text-1",
-        idempotencyKey: "text-job",
-        text: "hello",
-        channel: "feishu",
-      },
-      context,
-    );
-    await router.handle(
-      {
-        command: "inbox_poll",
-        requestId: "inbox-1",
-        consumerId: "gateway",
-        channel: "feishu",
-      },
-      context,
-    );
-
+    await expect(
+      router.handle(
+        {
+          command: "send_text",
+          requestId: "feishu-text",
+          idempotencyKey: "feishu-text-key",
+          text: "hello Feishu",
+          channel: "feishu",
+        },
+        { emit: vi.fn(), requestVerifyCode: vi.fn() },
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      command: "send",
+      requestId: "feishu-text",
+    });
     expect(execute).toHaveBeenCalledWith({
       type: "send-text",
-      requestId: "text-1",
-      idempotencyKey: "text-job",
-      text: "hello",
+      requestId: "feishu-text",
+      idempotencyKey: "feishu-text-key",
+      text: "hello Feishu",
       channel: "feishu",
     });
-    expect(feishuInbox.poll).toHaveBeenCalledWith("gateway");
-    expect(wechatInbox.poll).not.toHaveBeenCalled();
   });
 
   it("streams login QR and Tencent pairing states through IPC", async () => {

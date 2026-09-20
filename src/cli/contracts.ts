@@ -267,12 +267,13 @@ export function localizedMessage(
       en: "Select --default-channel wechat|feishu.",
     },
     FEISHU_CONFIGURATION_REQUIRED: {
-      "zh-CN": "需要飞书应用配置；使用 --feishu-config-stdin 从标准输入读取。",
-      en: "Supply Feishu application configuration using --feishu-config-stdin.",
+      "zh-CN":
+        "需要飞书 Webhook 配置；使用 --feishu-config-stdin 从标准输入读取。",
+      en: "Supply Feishu Webhook configuration using --feishu-config-stdin.",
     },
     FEISHU_CONFIGURATION_INVALID: {
-      "zh-CN": "飞书应用配置无效。",
-      en: "Invalid Feishu application configuration.",
+      "zh-CN": "飞书 Webhook 配置无效。",
+      en: "Invalid Feishu Webhook configuration.",
     },
 
     NODE_VERSION_UNSUPPORTED: {

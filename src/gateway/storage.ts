@@ -7,7 +7,7 @@ const absolutePath = z.string().min(1).max(16_384).refine(isAbsolute);
 export const gatewayConfigSchema = z.strictObject({
   schemaVersion: z.literal(1),
   installationId: z.string().uuid(),
-  channel: z.enum(["wechat", "feishu"]),
+  channel: z.literal("wechat"),
   permission: z.enum(["full", "workspace", "read-only"]),
   codexExecutable: absolutePath,
   workingDirectory: absolutePath,

@@ -429,14 +429,14 @@ export class CliContext {
           );
           if (!parsed.success)
             throw new SetupCoordinatorError("FEISHU_CONFIGURATION_INVALID");
-          const candidate = new FeishuClient(parsed.data, parsed.data);
+          const candidate = new FeishuClient(parsed.data);
           await candidate.verify();
           await secrets.save(parsed.data);
         } else {
           const existing = await secrets.load();
           if (existing === null)
             throw new SetupCoordinatorError("FEISHU_CONFIGURATION_REQUIRED");
-          await new FeishuClient(existing, existing).verify();
+          await new FeishuClient(existing).verify();
         }
       }
       await store.save(messageConfig);
