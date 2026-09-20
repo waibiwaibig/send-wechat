@@ -36,6 +36,7 @@ export type SendFileCommand = {
   fileName: string;
   byteLength: number;
   contentSha256: string;
+  mediaKind?: "image" | "file";
 };
 export type SendCommand = SendTextCommand | SendFileCommand;
 export type RuntimeCommand = StatusCommand | SendCommand;
@@ -389,7 +390,7 @@ export class RuntimeApplication {
       return hash.update(`${purpose}\0`).update(command.text).digest("hex");
     }
     return hash
-      .update("file\0")
+      .update(`${command.mediaKind ?? "file"}\0`)
       .update(command.fileName)
       .update("\0")
       .update(command.contentSha256)
@@ -401,6 +402,9 @@ export class RuntimeApplication {
       ? { type: "text", text: command.text }
       : {
           type: "file",
+          ...(command.mediaKind === undefined
+            ? {}
+            : { mediaKind: command.mediaKind }),
           stagedPath: command.stagedPath,
           fileName: command.fileName,
           byteLength: command.byteLength,

@@ -241,7 +241,7 @@ describe("runtime send interface", () => {
     });
     const idempotencyKey = "connection:1787572799000";
     const text =
-      "send-wechat 已连接，可以开始使用。 / send-wechat is connected and ready.";
+      "send-message 已连接，可以开始使用。 / send-message is connected and ready.";
 
     await app.execute({
       type: "send-text",

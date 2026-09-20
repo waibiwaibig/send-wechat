@@ -219,7 +219,7 @@ describe("polling coordinator interface", () => {
         type: "send-text",
         requestId: `connection:${now - 1000}`,
         idempotencyKey: `connection:${now - 1000}`,
-        text: "send-wechat 已连接，可以开始使用。 / send-wechat is connected and ready.",
+        text: "send-message 已连接，可以开始使用。 / send-message is connected and ready.",
         purpose: "connection",
       },
       recordedLastInboundAt: now - 1000,
@@ -412,6 +412,107 @@ describe("polling coordinator interface", () => {
     });
     expect(stateStore.state?.pollCursor).toBe("after-inbox-error");
     expect(credentialStore.secret?.contextToken).toBe("new-context");
+  });
+
+  it("downloads attachments only after owner filtering and accepts pure attachment messages", async () => {
+    const stateStore = new MemoryStateStore(state());
+    const credentialStore = new MemoryCredentialStore(secret);
+    const appended: InboundText[][] = [];
+    const received: string[] = [];
+    const result: PollUpdatesResult = {
+      status: "ok",
+      cursor: "after-attachments",
+      suggestedTimeoutMs: 27000,
+      inbound: [
+        {
+          messageType: 1,
+          fromUserId: "other-user",
+          contextToken: "other-context",
+          createTimeMs: now - 2000,
+          id: "other-attachment",
+          attachments: [
+            {
+              type: "file",
+              fileName: "secret.txt",
+              encryptQueryParam: "other-query",
+              aesKey: null,
+              fullUrl: null,
+              imageAesKeyHex: null,
+            },
+          ],
+        },
+        {
+          messageType: 1,
+          fromUserId: "bound-user",
+          contextToken: "bound-context",
+          createTimeMs: now - 1000,
+          id: "bound-attachment",
+          attachments: [
+            {
+              type: "image",
+              fileName: "image",
+              encryptQueryParam: "bound-query",
+              aesKey: "key",
+              fullUrl: null,
+              imageAesKeyHex: "00112233445566778899aabbccddeeff",
+            },
+          ],
+        },
+      ],
+    };
+    const coordinator = new PollingCoordinator({
+      stateStore,
+      credentialStore,
+      ilink: {
+        async pollUpdates() {
+          return result;
+        },
+        async notifyLifecycle() {},
+      },
+      inbox: {
+        append(messages) {
+          appended.push(messages);
+        },
+      },
+      receiveAttachments: async (message) => {
+        received.push(message.id ?? "missing");
+        return [
+          {
+            type: "image",
+            path: "/tmp/inbound-image",
+            fileName: "image",
+          },
+        ];
+      },
+      runtime: {
+        isDeliveryIdle: () => true,
+        async execute() {
+          return {};
+        },
+      },
+      clock: { now: () => now },
+      sleep: async () => {},
+      random: () => 0.5,
+    });
+
+    await coordinator.pollOnce();
+
+    expect(received).toEqual(["bound-attachment"]);
+    expect(appended).toEqual([
+      [
+        {
+          id: "bound-attachment",
+          attachments: [
+            {
+              type: "image",
+              path: "/tmp/inbound-image",
+              fileName: "image",
+            },
+          ],
+          receivedAt: now - 1000,
+        },
+      ],
+    ]);
   });
 
   it("consumes a fresh /recover before the secretary and acknowledges it once", async () => {
@@ -817,7 +918,8 @@ describe("polling coordinator interface", () => {
         ...(broken
           ? {
               inbox: {
-                append(_messages: InboundText[]) {
+                append(messages: InboundText[]) {
+                  void messages;
                   appendCalls += 1;
                   throw new Error("inbox unavailable");
                 },

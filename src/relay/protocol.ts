@@ -21,6 +21,7 @@ const remoteCommandSchema = z.discriminatedUnion("command", [
   z.strictObject({ command: z.literal("status") }),
   z.strictObject({
     command: z.literal("send_text"),
+    channel: z.enum(["wechat", "feishu", "both"]).optional(),
     idempotencyKey: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/),
     text: z.string().refine((value) => {
       const length = Array.from(value).length;
@@ -59,6 +60,8 @@ const remoteCommandSchema = z.discriminatedUnion("command", [
   }),
   z.strictObject({
     command: z.literal("file_commit"),
+    channel: z.enum(["wechat", "feishu", "both"]).optional(),
+    mediaKind: z.enum(["image", "file"]).optional(),
     uploadId: z.string().length(22).regex(BASE64URL),
     idempotencyKey: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/),
     contentSha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -142,7 +145,7 @@ export class RelayHttpTransport implements RelayTransportPort {
         method: "POST",
         headers: {
           "content-type": "application/octet-stream",
-          "x-send-wechat-request-id": requestId,
+          "x-send-message-request-id": requestId,
         },
         body: new Uint8Array(frame),
         signal: AbortSignal.timeout(this.timeoutMs),

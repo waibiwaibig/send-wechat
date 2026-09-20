@@ -17,35 +17,35 @@ describe("resolvePlatformPaths", () => {
     });
 
     expect(paths.stateDir).toBe(
-      "/Users/alice/Library/Application Support/send-wechat",
+      "/Users/alice/Library/Application Support/send-message",
     );
-    expect(paths.logDir).toBe("/Users/alice/Library/Logs/send-wechat");
+    expect(paths.logDir).toBe("/Users/alice/Library/Logs/send-message");
     expect(paths.runDir).toBe(
-      "/Users/alice/Library/Application Support/send-wechat/run",
+      "/Users/alice/Library/Application Support/send-message/run",
     );
     expect(paths.socketPath).toBe(
-      "/Users/alice/Library/Application Support/send-wechat/run/send-wechat.sock",
+      "/Users/alice/Library/Application Support/send-message/run/send-message.sock",
     );
     expect(paths.stateFile).toBe(
-      "/Users/alice/Library/Application Support/send-wechat/state.json",
+      "/Users/alice/Library/Application Support/send-message/state.json",
     );
     expect(paths.installationFile).toBe(
-      "/Users/alice/Library/Application Support/send-wechat/installation.json",
+      "/Users/alice/Library/Application Support/send-message/installation.json",
     );
     expect(paths.idempotencyFile).toBe(
-      "/Users/alice/Library/Application Support/send-wechat/idempotency.sqlite3",
+      "/Users/alice/Library/Application Support/send-message/idempotency.sqlite3",
     );
     expect(paths.clientCredentialFile).toBe(
-      "/Users/alice/Library/Application Support/send-wechat/client-credential.json",
+      "/Users/alice/Library/Application Support/send-message/client-credential.json",
     );
     expect(paths.capabilityFile).toBe(
-      "/Users/alice/Library/Application Support/send-wechat/capability",
+      "/Users/alice/Library/Application Support/send-message/capability",
     );
     expect(paths.tempDir).toBe(
-      "/Users/alice/Library/Application Support/send-wechat/tmp",
+      "/Users/alice/Library/Application Support/send-message/tmp",
     );
     expect(paths.serviceConfigPath).toBe(
-      "/Users/alice/Library/LaunchAgents/io.github.waibiwaibig.send-wechat.plist",
+      "/Users/alice/Library/LaunchAgents/io.github.waibiwaibig.send-message.plist",
     );
   });
 
@@ -62,20 +62,20 @@ describe("resolvePlatformPaths", () => {
       username: "alice",
     });
 
-    expect(paths.stateDir).toBe("/run/user/1000/state/send-wechat");
-    expect(paths.logDir).toBe("/run/user/1000/state/send-wechat/logs");
-    expect(paths.runDir).toBe("/run/user/1000/send-wechat");
+    expect(paths.stateDir).toBe("/run/user/1000/state/send-message");
+    expect(paths.logDir).toBe("/run/user/1000/state/send-message/logs");
+    expect(paths.runDir).toBe("/run/user/1000/send-message");
     expect(paths.installationFile).toBe(
-      "/run/user/1000/state/send-wechat/installation.json",
+      "/run/user/1000/state/send-message/installation.json",
     );
     expect(paths.clientCredentialFile).toBe(
-      "/run/user/1000/state/send-wechat/client-credential.json",
+      "/run/user/1000/state/send-message/client-credential.json",
     );
     expect(paths.socketPath).toBe(
-      "/run/user/1000/send-wechat/send-wechat.sock",
+      "/run/user/1000/send-message/send-message.sock",
     );
     expect(paths.serviceConfigPath).toBe(
-      "/home/alice/.config/systemd/user/send-wechat.service",
+      "/home/alice/.config/systemd/user/send-message.service",
     );
   });
 
@@ -89,9 +89,9 @@ describe("resolvePlatformPaths", () => {
       username: "alice",
     });
 
-    expect(paths.runDir).toBe("/home/alice/.local/state/send-wechat/run");
+    expect(paths.runDir).toBe("/home/alice/.local/state/send-message/run");
     expect(paths.clientCredentialFile).toBe(
-      "/home/alice/.local/state/send-wechat/client-credential.json",
+      "/home/alice/.local/state/send-message/client-credential.json",
     );
     expect(paths.linuxRuntimeDir).toBeUndefined();
     expect(() => assertLinuxServiceRuntime(paths)).toThrowError(
@@ -140,12 +140,12 @@ describe("resolvePlatformPaths", () => {
     });
 
     expect(paths.stateDir).toBe(
-      "C:\\Users\\Alice\\AppData\\Local\\send-wechat",
+      "C:\\Users\\Alice\\AppData\\Local\\send-message",
     );
     expect(paths.logDir).toBe(paths.stateDir + "\\log");
     expect(paths.runDir).toBe(paths.stateDir + "\\run");
     expect(paths.socketPath).toMatch(
-      /^\\\\\.\\pipe\\send-wechat-[0-9a-f]{16}$/,
+      /^\\\\\.\\pipe\\send-message-[0-9a-f]{16}$/,
     );
     expect(paths.installationFile).toBe(paths.stateDir + "\\installation.json");
     expect(paths.clientCredentialFile).toBe(

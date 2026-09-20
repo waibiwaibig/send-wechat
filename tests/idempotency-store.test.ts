@@ -35,7 +35,7 @@ function entry(key: string, createdAt = 1000): IdempotencyEntry {
 
 describe("SQLite idempotency ledger", () => {
   it("inserts, finds, updates, and prunes entries without rewriting runtime state", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "send-wechat-ledger-"));
+    const directory = await mkdtemp(join(tmpdir(), "send-message-ledger-"));
     directories.push(directory);
     const filePath = join(directory, "idempotency.sqlite3");
     const store = new SqliteIdempotencyStore(filePath);
@@ -58,7 +58,7 @@ describe("SQLite idempotency ledger", () => {
   });
 
   it("rejects duplicate insertion and an incompatible pre-existing schema", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "send-wechat-ledger-"));
+    const directory = await mkdtemp(join(tmpdir(), "send-message-ledger-"));
     directories.push(directory);
     const filePath = join(directory, "idempotency.sqlite3");
     const store = new SqliteIdempotencyStore(filePath);
@@ -80,7 +80,7 @@ describe("SQLite idempotency ledger", () => {
 
   it("validates keys, entries, cutoffs, updates, and owner-only paths", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "send-wechat-ledger-errors-"),
+      join(tmpdir(), "send-message-ledger-errors-"),
     );
     directories.push(directory);
     const filePath = join(directory, "idempotency.sqlite3");

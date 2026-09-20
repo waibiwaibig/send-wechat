@@ -22,9 +22,11 @@ import type { PlatformPaths } from "../src/platform/paths.js";
 import {
   gatewayConfigSchema,
   gatewayStateSchema,
-  readGatewayFile,
-  writeGatewayFile,
 } from "../src/gateway/storage.js";
+import {
+  readPrivateJson,
+  writePrivateJson,
+} from "../src/storage/private-json.js";
 import { gatewayStatusSchema } from "../src/gateway/runtime.js";
 
 const roots: string[] = [];
@@ -37,7 +39,7 @@ afterEach(async () => {
 });
 
 async function fixtureRoot(): Promise<{ root: string; paths: PlatformPaths }> {
-  const root = await mkdtemp(path.join(tmpdir(), "send-wechat-gateway-cli-"));
+  const root = await mkdtemp(path.join(tmpdir(), "send-message-gateway-cli-"));
   roots.push(root);
   const paths: PlatformPaths = {
     platform: "darwin",
@@ -46,15 +48,15 @@ async function fixtureRoot(): Promise<{ root: string; paths: PlatformPaths }> {
     stateDir: root,
     logDir: path.join(root, "logs"),
     runDir: path.join(root, "run"),
-    socketPath: path.join(root, "run", "send-wechat.sock"),
-    ipcEndpoint: path.join(root, "run", "send-wechat.sock"),
+    socketPath: path.join(root, "run", "send-message.sock"),
+    ipcEndpoint: path.join(root, "run", "send-message.sock"),
     stateFile: path.join(root, "state.json"),
     installationFile: path.join(root, "installation.json"),
     idempotencyFile: path.join(root, "idempotency.sqlite3"),
     capabilityFile: path.join(root, "capability"),
     clientCredentialFile: path.join(root, "client-credential.json"),
     tempDir: path.join(root, "tmp"),
-    serviceConfigPath: path.join(root, "send-wechat.plist"),
+    serviceConfigPath: path.join(root, "send-message.plist"),
   };
   return { root, paths };
 }
@@ -135,14 +137,17 @@ describe("gateway CLI", () => {
     const resolveCodex = vi.fn(async () => "/opt/codex/bin/codex");
 
     await expect(
-      runGatewayCli(["setup", "--cwd", work, "--codex", "codex"], {
-        paths,
-        service,
-        stdout: streams.emit,
-        stderr: streams.error,
-        assertHub,
-        resolveCodex,
-      }),
+      runGatewayCli(
+        ["--channel", "wechat", "setup", "--cwd", work, "--codex", "codex"],
+        {
+          paths,
+          service,
+          stdout: streams.emit,
+          stderr: streams.error,
+          assertHub,
+          resolveCodex,
+        },
+      ),
     ).resolves.toBe(0);
 
     expect(assertHub).toHaveBeenCalledOnce();
@@ -152,8 +157,8 @@ describe("gateway CLI", () => {
     expect(service.install.mock.invocationCallOrder[0]).toBeLessThan(
       service.start.mock.invocationCallOrder[0]!,
     );
-    const saved = await readGatewayFile(
-      gatewayPaths(paths).config,
+    const saved = await readPrivateJson(
+      gatewayPaths(paths, "wechat").config,
       gatewayConfigSchema,
     );
     expect(saved).toMatchObject({
@@ -166,18 +171,55 @@ describe("gateway CLI", () => {
     );
 
     await expect(
-      runGatewayCli(["setup", "--cwd", work, "--codex", "codex"], {
-        paths,
-        service,
-        stdout: streams.emit,
-        stderr: streams.error,
-        assertHub,
-        resolveCodex,
-      }),
+      runGatewayCli(
+        ["--channel", "wechat", "setup", "--cwd", work, "--codex", "codex"],
+        {
+          paths,
+          service,
+          stdout: streams.emit,
+          stderr: streams.error,
+          assertHub,
+          resolveCodex,
+        },
+      ),
     ).resolves.toBe(0);
     await expect(
-      readGatewayFile(gatewayPaths(paths).config, gatewayConfigSchema),
+      readPrivateJson(
+        gatewayPaths(paths, "wechat").config,
+        gatewayConfigSchema,
+      ),
     ).resolves.toMatchObject({ installationId: saved?.installationId });
+  });
+
+  it("accepts a local installation when setting up the gateway", async () => {
+    const { root, paths } = await fixtureRoot();
+    const work = path.join(root, "codex-work");
+    await mkdir(work);
+    await writeFile(
+      paths.installationFile,
+      JSON.stringify({ schemaVersion: 1, role: "local" }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      path.join(paths.stateDir, "channels.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        channels: ["feishu"],
+        defaultChannel: "feishu",
+      }),
+      { mode: 0o600 },
+    );
+    const service = fakeService();
+
+    await expect(
+      runGatewayCli(["--channel", "feishu", "setup", "--cwd", work], {
+        paths,
+        service,
+        resolveCodex: async () => "/opt/codex/bin/codex",
+      }),
+    ).resolves.toBe(0);
+    expect(service.install).toHaveBeenCalledOnce();
+    expect(service.start).toHaveBeenCalledOnce();
   });
 
   it("refuses setup while the service is running without replacing its config", async () => {
@@ -186,13 +228,15 @@ describe("gateway CLI", () => {
     await import("node:fs/promises").then(({ mkdir }) => mkdir(work));
     const savedConfig = {
       schemaVersion: 1 as const,
+      channel: "wechat" as const,
+      permission: "workspace" as const,
       installationId: INSTALLATION_ID,
       codexExecutable: "/old/codex",
       workingDirectory: work,
       searchPath: "/old/path",
     };
-    await writeGatewayFile(
-      gatewayPaths(paths).config,
+    await writePrivateJson(
+      gatewayPaths(paths, "wechat").config,
       gatewayConfigSchema,
       savedConfig,
     );
@@ -200,7 +244,7 @@ describe("gateway CLI", () => {
     const streams = output();
 
     await expect(
-      runGatewayCli(["--json", "setup", "--cwd", work], {
+      runGatewayCli(["--channel", "wechat", "--json", "setup", "--cwd", work], {
         paths,
         service,
         stdout: streams.emit,
@@ -213,7 +257,10 @@ describe("gateway CLI", () => {
     expect(service.install).not.toHaveBeenCalled();
     expect(service.start).not.toHaveBeenCalled();
     await expect(
-      readGatewayFile(gatewayPaths(paths).config, gatewayConfigSchema),
+      readPrivateJson(
+        gatewayPaths(paths, "wechat").config,
+        gatewayConfigSchema,
+      ),
     ).resolves.toEqual(savedConfig);
   });
 
@@ -225,7 +272,7 @@ describe("gateway CLI", () => {
     const streams = output();
 
     await expect(
-      runGatewayCli(["--json", "setup", "--cwd", file], {
+      runGatewayCli(["--channel", "wechat", "--json", "setup", "--cwd", file], {
         paths,
         service,
         stdout: streams.emit,
@@ -245,8 +292,8 @@ describe("gateway CLI", () => {
   });
 
   it("rejects setup when the saved gateway config is damaged", async () => {
-    const { paths } = await fixtureRoot();
-    const gateway = gatewayPaths(paths);
+    const { root, paths } = await fixtureRoot();
+    const gateway = gatewayPaths(paths, "wechat");
     await mkdir(gateway.directory, { recursive: true, mode: 0o700 });
     await writeFile(
       gateway.config,
@@ -257,7 +304,7 @@ describe("gateway CLI", () => {
     const streams = output();
 
     await expect(
-      runGatewayCli(["--json", "setup"], {
+      runGatewayCli(["--channel", "wechat", "--json", "setup", "--cwd", root], {
         paths,
         service,
         stdout: streams.emit,
@@ -270,14 +317,14 @@ describe("gateway CLI", () => {
     expect(JSON.parse(streams.stdout[0]!)).toEqual({
       schemaVersion: 1,
       ok: false,
-      error: { code: "GATEWAY_STORAGE_INVALID" },
+      error: { code: "PRIVATE_STORAGE_INVALID" },
     });
     expect(service.status).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();
   });
 
   it("rejects non-Hub control without touching the service", async () => {
-    const { paths } = await fixtureRoot();
+    const { root, paths } = await fixtureRoot();
     const service = fakeService();
     const streams = output();
     const assertHub = vi.fn(async () => {
@@ -285,7 +332,7 @@ describe("gateway CLI", () => {
     });
 
     await expect(
-      runGatewayCli(["--json", "setup"], {
+      runGatewayCli(["--channel", "wechat", "--json", "setup", "--cwd", root], {
         paths,
         service,
         stdout: streams.emit,
@@ -309,13 +356,15 @@ describe("gateway CLI", () => {
     const { paths } = await fixtureRoot();
     const config = {
       schemaVersion: 1 as const,
+      channel: "wechat" as const,
+      permission: "workspace" as const,
       installationId: INSTALLATION_ID,
       codexExecutable: "/codex",
       workingDirectory: "/workspace",
       searchPath: "/custom/bin",
     };
-    await writeGatewayFile(
-      gatewayPaths(paths).config,
+    await writePrivateJson(
+      gatewayPaths(paths, "wechat").config,
       gatewayConfigSchema,
       config,
     );
@@ -328,7 +377,7 @@ describe("gateway CLI", () => {
     });
 
     await expect(
-      runGatewayCli(["run"], {
+      runGatewayCli(["--channel", "wechat", "run"], {
         paths,
         service,
         assertHub: async () => undefined,
@@ -345,7 +394,7 @@ describe("gateway CLI", () => {
     const streams = output();
 
     await expect(
-      runGatewayCli(["--json", "status"], {
+      runGatewayCli(["--channel", "wechat", "--json", "status"], {
         paths,
         service,
         stdout: streams.emit,
@@ -364,17 +413,21 @@ describe("gateway CLI", () => {
       },
     });
 
-    await writeGatewayFile(gatewayPaths(paths).status, gatewayStatusSchema, {
-      schemaVersion: 1,
-      pid: 42,
-      updatedAt: Date.now(),
-      phase: "ready",
-      threadId: null,
-      turnId: null,
-      lastError: null,
-    });
+    await writePrivateJson(
+      gatewayPaths(paths, "wechat").status,
+      gatewayStatusSchema,
+      {
+        schemaVersion: 1,
+        pid: 42,
+        updatedAt: Date.now(),
+        phase: "ready",
+        threadId: null,
+        turnId: null,
+        lastError: null,
+      },
+    );
     await expect(
-      runGatewayCli(["--json", "status"], {
+      runGatewayCli(["--channel", "wechat", "--json", "status"], {
         paths,
         service,
         stdout: streams.emit,
@@ -388,22 +441,24 @@ describe("gateway CLI", () => {
 
   it("reports an expired ready heartbeat as unresponsive", async () => {
     const { paths } = await fixtureRoot();
-    const gateway = gatewayPaths(paths);
-    await writeGatewayFile(gateway.config, gatewayConfigSchema, {
+    const gateway = gatewayPaths(paths, "wechat");
+    await writePrivateJson(gateway.config, gatewayConfigSchema, {
       schemaVersion: 1,
+      channel: "wechat",
+      permission: "workspace",
       installationId: INSTALLATION_ID,
       codexExecutable: "/codex",
       workingDirectory: "/workspace",
       searchPath: "/custom/bin",
     });
-    await writeGatewayFile(gateway.state, gatewayStateSchema, {
+    await writePrivateJson(gateway.state, gatewayStateSchema, {
       schemaVersion: 1,
       threadId: "thread-1",
       handled: [],
       pending: [],
       lastError: null,
     });
-    await writeGatewayFile(gateway.status, gatewayStatusSchema, {
+    await writePrivateJson(gateway.status, gatewayStatusSchema, {
       schemaVersion: 1,
       pid: 42,
       updatedAt: Date.now() - 16_000,
@@ -415,7 +470,7 @@ describe("gateway CLI", () => {
     const streams = output();
 
     await expect(
-      runGatewayCli(["--json", "status"], {
+      runGatewayCli(["--channel", "wechat", "--json", "status"], {
         paths,
         service: fakeService(true),
         stdout: streams.emit,
@@ -440,7 +495,7 @@ describe("gateway CLI", () => {
 
     for (const operation of ["install", "start", "restart"] as const) {
       await expect(
-        runGatewayCli(["--json", "service", operation], {
+        runGatewayCli(["--channel", "wechat", "--json", "service", operation], {
           paths,
           service,
           stdout: streams.emit,
@@ -476,20 +531,26 @@ describe("gateway CLI", () => {
 
   it("loads config before installing, starting, or restarting the service", async () => {
     const { paths } = await fixtureRoot();
-    await writeGatewayFile(gatewayPaths(paths).config, gatewayConfigSchema, {
-      schemaVersion: 1,
-      installationId: INSTALLATION_ID,
-      codexExecutable: "/codex",
-      workingDirectory: "/workspace",
-      searchPath: "/custom/bin",
-    });
+    await writePrivateJson(
+      gatewayPaths(paths, "wechat").config,
+      gatewayConfigSchema,
+      {
+        schemaVersion: 1,
+        channel: "wechat",
+        permission: "workspace",
+        installationId: INSTALLATION_ID,
+        codexExecutable: "/codex",
+        workingDirectory: "/workspace",
+        searchPath: "/custom/bin",
+      },
+    );
     const service = fakeService();
     const streams = output();
     const assertHub = vi.fn(async () => undefined);
 
     for (const operation of ["install", "start", "restart"] as const) {
       await expect(
-        runGatewayCli(["service", operation], {
+        runGatewayCli(["--channel", "wechat", "service", operation], {
           paths,
           service,
           stdout: streams.emit,
@@ -514,7 +575,7 @@ describe("gateway CLI", () => {
     });
 
     await expect(
-      runGatewayCli(["service", "stop"], {
+      runGatewayCli(["--channel", "wechat", "service", "stop"], {
         paths,
         service,
         assertHub,
@@ -523,7 +584,7 @@ describe("gateway CLI", () => {
       }),
     ).resolves.toBe(0);
     await expect(
-      runGatewayCli(["service", "uninstall"], {
+      runGatewayCli(["--channel", "wechat", "service", "uninstall"], {
         paths,
         service,
         assertHub,
@@ -540,7 +601,7 @@ describe("gateway CLI", () => {
   it("renders usage errors as JSON or human-readable stderr", async () => {
     const jsonStreams = output();
     await expect(
-      runGatewayCli(["--json", "unknown-command"], {
+      runGatewayCli(["--channel", "wechat", "--json", "unknown-command"], {
         stdout: jsonStreams.emit,
         stderr: jsonStreams.error,
       }),
@@ -553,7 +614,7 @@ describe("gateway CLI", () => {
 
     const humanStreams = output();
     await expect(
-      runGatewayCli(["unknown-command"], {
+      runGatewayCli(["--channel", "wechat", "unknown-command"], {
         stdout: humanStreams.emit,
         stderr: humanStreams.error,
       }),
@@ -579,7 +640,7 @@ describe("gateway CLI", () => {
 
     await expect(runGatewayCli(["--help"], dependencies)).resolves.toBe(0);
     expect(pathAccesses).toBe(0);
-    expect(streams.stdout.join("")).toContain("send-wechat-gateway");
+    expect(streams.stdout.join("")).toContain("send-message-gateway");
   });
 
   it("renders version without resolving platform paths or service dependencies", async () => {

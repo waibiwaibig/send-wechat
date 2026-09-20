@@ -163,7 +163,7 @@ describe.skipIf(smokeBinary === undefined)(
         throw new Error("CODEX_SMOKE_BINARY must point to a Codex executable");
       }
       const root = await mkdtemp(
-        path.join(tmpdir(), "send-wechat-codex-smoke-"),
+        path.join(tmpdir(), "send-message-codex-smoke-"),
       );
       temporaryDirectories.push(root);
       const codexHome = path.join(root, "codex-home");
@@ -186,6 +186,7 @@ describe.skipIf(smokeBinary === undefined)(
         firstClient = new CodexAppServer({
           executable,
           cwd: workspace,
+          channel: "wechat",
           args,
           env: environment,
           requestTimeoutMs: 8_000,
@@ -230,7 +231,10 @@ describe.skipIf(smokeBinary === undefined)(
           text: "MOCK_OK",
         });
         const skillText = await readFile(
-          path.join(process.cwd(), ".agents/skills/wechat-connection/SKILL.md"),
+          path.join(
+            process.cwd(),
+            ".agents/skills/message-connection/SKILL.md",
+          ),
           "utf8",
         );
         const capturedRequests = (await readFile(modelCapture, "utf8"))
@@ -255,6 +259,7 @@ describe.skipIf(smokeBinary === undefined)(
         secondClient = new CodexAppServer({
           executable,
           cwd: workspace,
+          channel: "wechat",
           args,
           env: environment,
           requestTimeoutMs: 8_000,

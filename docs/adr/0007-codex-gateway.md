@@ -1,10 +1,11 @@
 # ADR 0007: Optional single-conversation Codex gateway
 
+Current product scope: [ADR 0009](0009-unified-messaging.md) supersedes the WeChat-only interface, mandatory Relay, text-only secretary, and full-access default described below.
 Status: accepted
 
 ## Decision
 
-Publish `send-wechat-gateway` as a second executable in the existing package.
+Publish `send-message-gateway` as a second executable in the existing package.
 It runs as an independently managed process on the Hub and connects to a
 Codex CLI app-server over stdio. It owns one current thread pointer. Codex
 owns conversation history, model execution, tools and any work it delegates.
@@ -12,7 +13,7 @@ The gateway forwards model and permission selections to Codex; it has no model
 execution, task router, session browser or cross-session tools.
 
 Agent-first onboarding keeps the existing sending setup as the first completed
-outcome. The packaged send-wechat skill then offers the secretary once during
+outcome. The packaged send-message skill then offers the secretary once during
 that onboarding conversation. A user's opt-in authorizes routine Codex and
 gateway setup on the existing Hub; a decline leaves sending ready. Direct
 secretary setup requests already supply this choice. Ordinary sends and repair
@@ -46,7 +47,7 @@ the Codex thread or interrupting a turn. Unknown commands reaching the gateway
 stay in the gateway and return help.
 
 The first turn of each newly created thread supplies the packaged
-`wechat-connection` skill as a separate native skill input. User text remains
+`message-connection` skill as a separate native skill input. User text remains
 unchanged. Resumed threads do not repeat this injection.
 The adapter registers the package's standalone skill root using the app-server
 process-scoped `skills/extraRoots/set` interface, so discovery does not depend
@@ -106,7 +107,7 @@ fail explicitly rather than selecting another runtime or a legacy interface.
 The platform service module accepts an explicit service identity so both
 executables share the existing platform implementation with distinct service
 names and files. The gateway can be stopped or removed independently. Existing
-send-wechat service behavior remains the default identity and is covered by
+send-message service behavior remains the default identity and is covered by
 regression tests.
 
 ## Consequences

@@ -52,6 +52,8 @@ export class HubRemoteFileUploads {
         requestId: string;
         command: "send_file";
         idempotencyKey: string;
+        channel?: "wechat" | "feishu" | "both";
+        mediaKind?: "image" | "file";
         fileName: string;
         byteLength: number;
         contentSha256: string;
@@ -228,6 +230,10 @@ export class HubRemoteFileUploads {
         requestId: this.dependencies.requestId(),
         command: "send_file",
         idempotencyKey: command.idempotencyKey,
+        ...(command.channel === undefined ? {} : { channel: command.channel }),
+        ...(command.mediaKind === undefined
+          ? {}
+          : { mediaKind: command.mediaKind }),
         fileName: upload.fileName,
         byteLength: upload.byteLength,
         contentSha256: actualHash,
@@ -277,6 +283,8 @@ export class RemoteFileSender {
     fileName: string;
     byteLength: number;
     idempotencyKey: string;
+    channel?: "wechat" | "feishu" | "both";
+    mediaKind?: "image" | "file";
   }): Promise<unknown> {
     const initial = await lstat(input.filePath);
     if (
@@ -340,6 +348,10 @@ export class RemoteFileSender {
         command: "file_commit",
         uploadId,
         idempotencyKey: input.idempotencyKey,
+        ...(input.channel === undefined ? {} : { channel: input.channel }),
+        ...(input.mediaKind === undefined
+          ? {}
+          : { mediaKind: input.mediaKind }),
         contentSha256: hash.digest("hex"),
       });
       throwIfProtocolFailure(result);

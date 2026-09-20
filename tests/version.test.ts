@@ -15,8 +15,8 @@ describe("release version", () => {
     };
     expect(APP_VERSION).toBe(packageJson.version);
     expect(packageJson.bin).toStrictEqual({
-      "send-wechat": "dist/cli/bin.js",
-      "send-wechat-gateway": "dist/gateway/bin.js",
+      "send-message": "dist/cli/bin.js",
+      "send-message-gateway": "dist/gateway/bin.js",
     });
     expect(packageJson.files).toContain("docs/gateway.md");
 

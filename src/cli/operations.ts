@@ -23,17 +23,20 @@ function optionIsPresent(value: unknown): boolean {
 }
 
 function normalizeSendOptions(options: SendOptions): {
-  kind: "text" | "file" | "stdin";
+  kind: "text" | "file" | "image" | "stdin";
   value: string;
 } {
   const provided = [
     optionIsPresent(options.text),
     optionIsPresent(options.stdin),
     optionIsPresent(options.file),
+    optionIsPresent(options.image),
   ].filter(Boolean).length;
   if (provided !== 1) failure("USAGE_ERROR", 2);
   if (options.text !== undefined) return { kind: "text", value: options.text };
   if (options.file !== undefined) return { kind: "file", value: options.file };
+  if (options.image !== undefined)
+    return { kind: "image", value: options.image };
   return { kind: "stdin", value: "" };
 }
 
@@ -80,10 +83,15 @@ async function runSend(
     failure("INVALID_IDEMPOTENCY_KEY", 2);
   let payload: IpcClientPayload;
   let filePath: string | undefined;
-  if (input.kind === "file") {
+  if (input.kind === "file" || input.kind === "image") {
     const metadata = await validateFile(input.value);
     filePath = input.value;
-    payload = { command: "send_file", idempotencyKey, ...metadata };
+    payload = {
+      command: "send_file",
+      idempotencyKey,
+      ...metadata,
+      mediaKind: input.kind,
+    };
   } else {
     const text =
       input.kind === "stdin" ? await context.readStdin() : input.value;
@@ -91,6 +99,8 @@ async function runSend(
     if (codePoints === 0 || codePoints > 4000) failure("INVALID_TEXT", 2);
     payload = { command: "send_text", idempotencyKey, text };
   }
+  if (options.channel !== undefined)
+    payload = { ...payload, channel: options.channel };
   return safeDaemonResult("send", await context.dispatch(payload, filePath));
 }
 
@@ -393,6 +403,16 @@ export async function runCommand(
         }
       }
       const setupOptions: SetupOptions = {
+        ...(optionsWithPair.channels === undefined
+          ? {}
+          : { channels: optionsWithPair.channels }),
+        ...(optionsWithPair.defaultChannel === undefined
+          ? {}
+          : { defaultChannel: optionsWithPair.defaultChannel }),
+        ...(optionsWithPair.feishuConfigStdin === true
+          ? { feishuConfigStdin: true }
+          : {}),
+        ...(optionsWithPair.relay === true ? { relay: true } : {}),
         ...(pair === undefined ? {} : { pair }),
         ...(optionsWithPair.pairStdout === true ? { pairStdout: true } : {}),
         ...(optionsWithPair.qrFile === undefined
@@ -428,6 +448,30 @@ export function humanSuccess(
   result: unknown,
   language: "zh-CN" | "en",
 ): string {
+  if (
+    command === "notifications" &&
+    isRecord(result) &&
+    isRecord(result.result)
+  )
+    return `${String(result.result.hooksPath)}\n${String(result.result.trustMessage)}\n`;
+  if (
+    (command === "send" || command === "status") &&
+    isRecord(result) &&
+    isRecord(result.result) &&
+    isRecord(result.result.channels)
+  ) {
+    return (
+      Object.entries(result.result.channels)
+        .map(([channel, value]) => {
+          if (!isRecord(value)) return `${channel}: UNKNOWN`;
+          if (isRecord(value.error))
+            return `${channel}: ${String(value.error.code)}`;
+          const details = isRecord(value.result) ? value.result : value;
+          return `${channel}: ${String(details.state)}${details.deduplicated === true ? " (deduplicated)" : ""}`;
+        })
+        .join("\n") + "\n"
+    );
+  }
   if (command === "doctor" && isRecord(result) && isRecord(result.checks)) {
     const labels: Record<string, { "zh-CN": string; en: string }> = {
       node: { "zh-CN": "Node", en: "Node" },
@@ -476,7 +520,10 @@ export function humanSuccess(
   if (command === "setup") {
     const details =
       isRecord(result) && isRecord(result.result) ? result.result : null;
-    if (details !== null && details.role === "hub")
+    if (
+      details !== null &&
+      (details.role === "hub" || details.role === "local")
+    )
       return language === "zh-CN" ? "Hub 已就绪。\n" : "Hub is ready.\n";
     return language === "zh-CN"
       ? "设备已连接到个人 Relay。\n"

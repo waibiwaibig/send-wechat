@@ -1,17 +1,14 @@
-import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, rm } from "node:fs/promises";
-import { dirname, isAbsolute } from "node:path";
-
+import { isAbsolute } from "node:path";
 import { z } from "zod";
-
-import { renameFile } from "../platform/atomic-rename.js";
+import { readPrivateJson, writePrivateJson } from "../storage/private-json.js";
 
 const absolutePath = z.string().min(1).max(16_384).refine(isAbsolute);
 
 export const gatewayConfigSchema = z.strictObject({
   schemaVersion: z.literal(1),
   installationId: z.string().uuid(),
+  channel: z.enum(["wechat", "feishu"]),
+  permission: z.enum(["full", "workspace", "read-only"]),
   codexExecutable: absolutePath,
   workingDirectory: absolutePath,
   searchPath: z.string().max(64 * 1024),
@@ -30,7 +27,7 @@ export const gatewayStateSchema = z.strictObject({
       effort: z.string().min(1).max(64).nullable(),
     })
     .optional(),
-  // An unselected secretary uses full access; this is local to gateway turns.
+  // An unselected secretary uses the configured initial permission.
   permission: z.enum(["full", "workspace", "read-only"]).optional(),
   // Absent preserves the historical default of incremental delivery.
   streamEnabled: z.boolean().optional(),
@@ -56,79 +53,6 @@ export function emptyGatewayState(): GatewayState {
   };
 }
 
-async function checkOwnerPath(file: string, directory = false): Promise<void> {
-  const info = await lstat(file);
-  if (
-    info.isSymbolicLink() ||
-    (directory ? !info.isDirectory() : !info.isFile()) ||
-    (!directory && info.size > 2 * 1024 * 1024) ||
-    (process.platform !== "win32" &&
-      ((info.mode & 0o077) !== 0 ||
-        (typeof process.getuid === "function" &&
-          info.uid !== process.getuid())))
-  ) {
-    throw new Error("GATEWAY_STORAGE_UNSAFE");
-  }
-}
-
-export async function readGatewayFile<T>(
-  file: string,
-  schema: z.ZodType<T>,
-): Promise<T | null> {
-  try {
-    await checkOwnerPath(dirname(file), true);
-    await checkOwnerPath(file);
-    const raw: unknown = JSON.parse(await readFile(file, "utf8"));
-    const parsed = schema.safeParse(raw);
-    if (!parsed.success) throw new Error("GATEWAY_STORAGE_INVALID");
-    return parsed.data;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-export async function writeGatewayFile<T>(
-  file: string,
-  schema: z.ZodType<T>,
-  value: T,
-): Promise<void> {
-  const parsed = schema.parse(value);
-  const directory = dirname(file);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await checkOwnerPath(directory, true);
-  try {
-    await checkOwnerPath(file);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  const temporary = `${file}.${randomUUID()}.tmp`;
-  try {
-    const handle = await open(
-      temporary,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
-      0o600,
-    );
-    try {
-      await handle.writeFile(`${JSON.stringify(parsed)}\n`, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await renameFile(temporary, file);
-    if (process.platform !== "win32") {
-      const parent = await open(directory, constants.O_RDONLY);
-      try {
-        await parent.sync();
-      } finally {
-        await parent.close();
-      }
-    }
-  } finally {
-    await rm(temporary, { force: true });
-  }
-}
-
 export class JsonGatewayStateStore implements GatewayStateStore {
   public constructor(
     private readonly file: string,
@@ -138,13 +62,13 @@ export class JsonGatewayStateStore implements GatewayStateStore {
   public async load(): Promise<GatewayState> {
     await this.guard?.();
     return (
-      (await readGatewayFile(this.file, gatewayStateSchema)) ??
+      (await readPrivateJson(this.file, gatewayStateSchema)) ??
       emptyGatewayState()
     );
   }
 
   public async save(state: GatewayState): Promise<void> {
     await this.guard?.();
-    await writeGatewayFile(this.file, gatewayStateSchema, state);
+    await writePrivateJson(this.file, gatewayStateSchema, state);
   }
 }

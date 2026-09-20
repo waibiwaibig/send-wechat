@@ -1,19 +1,20 @@
 # ADR 0001: Product and command interface
 
+Current product scope: [ADR 0009](0009-unified-messaging.md) supersedes the WeChat-only interface, mandatory Relay, text-only secretary, and full-access default described below.
 Status: accepted
 
 ## Decision
 
-Ship one public npm package and executable named `send-wechat`, requiring
+Ship one public npm package and executable named `send-message`, requiring
 Node.js 24 LTS. The public commands are:
 
 ```text
-send-wechat setup [--pair-stdin] [--qr-file PATH]
-send-wechat send (--text TEXT | --stdin | --file PATH) [--idempotency-key KEY]
-send-wechat status
-send-wechat doctor
-send-wechat reset
-send-wechat service install|start|stop|restart|uninstall
+send-message setup [--pair-stdin] [--qr-file PATH]
+send-message send (--text TEXT | --stdin | --file PATH) [--idempotency-key KEY]
+send-message status
+send-message doctor
+send-message reset
+send-message service install|start|stop|restart|uninstall
 ```
 
 Global `--json` emits one schema-versioned JSON result and global `--lang`
@@ -41,9 +42,9 @@ project-operated relay, public library interface, router configuration, or LAN
 listener. The user-owned relay transport is an internal interface and does not
 turn the CLI into a general Weixin HTTP endpoint.
 
-ADR 0007 adds the optional `send-wechat-gateway` executable. It has its own
+ADR 0007 adds the optional `send-message-gateway` executable. It has its own
 configuration and background service and consumes a generic authenticated local
-text inbox. The existing `send-wechat` command set remains independent of Codex.
+text inbox. The existing `send-message` command set remains independent of Codex.
 
 ## Consequences
 

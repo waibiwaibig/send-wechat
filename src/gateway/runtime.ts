@@ -1,4 +1,6 @@
+import { readPrivateJson, writePrivateJson } from "../storage/private-json.js";
 import { randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { z } from "zod";
@@ -10,11 +12,10 @@ import type { PlatformPaths } from "../platform/paths.js";
 import { CodexAppServer } from "./codex-client.js";
 import { GatewayController } from "./controller.js";
 import { gatewayPaths } from "./paths.js";
+import type { InboundText } from "../messaging/text-inbox.js";
 import {
   JsonGatewayStateStore,
   gatewayConfigSchema,
-  readGatewayFile,
-  writeGatewayFile,
   type GatewayConfig,
 } from "./storage.js";
 
@@ -23,11 +24,22 @@ const inboxResultSchema = z.object({
     .array(
       z.object({
         id: z.string().min(1).max(256),
-        text: z
-          .string()
-          .min(1)
-          .refine((value) => Array.from(value).length <= 4000),
+        text: z.string().refine((value) => Array.from(value).length <= 4000),
         receivedAt: z.number().int().nonnegative(),
+        attachments: z
+          .array(
+            z.object({
+              type: z.enum(["image", "file"]),
+              path: z.string().refine(isAbsolute),
+              fileName: z
+                .string()
+                .min(1)
+                .max(255)
+                .refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
+            }),
+          )
+          .max(10)
+          .optional(),
       }),
     )
     .max(50),
@@ -74,9 +86,9 @@ export async function runGateway(
   hub: PlatformPaths,
   signal: AbortSignal,
 ): Promise<void> {
-  const paths = gatewayPaths(hub);
+  const paths = gatewayPaths(hub, config.channel);
   const assertCurrentInstallation = async (): Promise<void> => {
-    const current = await readGatewayFile(paths.config, gatewayConfigSchema);
+    const current = await readPrivateJson(paths.config, gatewayConfigSchema);
     if (current?.installationId !== config.installationId) {
       throw new Error("GATEWAY_CONFIGURATION_REPLACED");
     }
@@ -96,10 +108,14 @@ export async function runGateway(
       payload,
       timeoutMs,
     });
+  const channelRequest = <T extends object>(payload: T): IpcClientPayload =>
+    ({ ...payload, channel: config.channel }) as unknown as IpcClientPayload;
 
   // Acquire exclusive input consumption before creating any Codex process.
   const initial = inboxResultSchema.parse(
-    unwrap(await request({ command: "inbox_poll", consumerId })),
+    unwrap(
+      await request(channelRequest({ command: "inbox_poll", consumerId })),
+    ),
   );
   let phase: "starting" | "ready" | "stopped" | "error" = "starting";
   let runtimeError: string | null = initial.overflow
@@ -112,12 +128,17 @@ export async function runGateway(
     codex: new CodexAppServer({
       executable: config.codexExecutable,
       cwd: config.workingDirectory,
+      channel: config.channel,
       env: { ...process.env, PATH: config.searchPath },
     }),
     store: new JsonGatewayStateStore(paths.state, assertCurrentInstallation),
+    initialPermission: config.permission,
     send: async (text, idempotencyKey) => {
       unwrap(
-        await request({ command: "send_text", text, idempotencyKey }, 30_000),
+        await request(
+          channelRequest({ command: "send_text", text, idempotencyKey }),
+          30_000,
+        ),
       );
     },
     onError: (code) => {
@@ -127,7 +148,7 @@ export async function runGateway(
   const writeStatus = async (): Promise<void> => {
     await assertCurrentInstallation();
     const current = controller.status();
-    await writeGatewayFile(paths.status, gatewayStatusSchema, {
+    await writePrivateJson(paths.status, gatewayStatusSchema, {
       schemaVersion: 1,
       pid: process.pid,
       updatedAt: Date.now(),
@@ -148,14 +169,20 @@ export async function runGateway(
       if (!controller.status().connected)
         throw new Error("GATEWAY_CODEX_DISCONNECTED");
       const poll = inboxResultSchema.parse(
-        unwrap(await request({ command: "inbox_poll", consumerId })),
+        unwrap(
+          await request(channelRequest({ command: "inbox_poll", consumerId })),
+        ),
       );
       if (poll.overflow) runtimeError = "GATEWAY_INBOX_OVERFLOW";
       if (processing === undefined && poll.messages.length > 0) {
         processing = controller
-          .accept(poll.messages)
+          .accept(normalizeMessages(poll.messages))
           .then(async (ids) => {
-            unwrap(await request({ command: "inbox_ack", consumerId, ids }));
+            unwrap(
+              await request(
+                channelRequest({ command: "inbox_ack", consumerId, ids }),
+              ),
+            );
           })
           .catch((error: unknown) => {
             processingError =
@@ -182,9 +209,22 @@ export async function runGateway(
       runtimeError ??= gatewayErrorCode(error);
     });
     await processing;
-    await request({ command: "inbox_release", consumerId }).catch(
-      () => undefined,
-    );
+    await request(
+      channelRequest({ command: "inbox_release", consumerId }),
+    ).catch(() => undefined);
     await writeStatus();
   }
+}
+
+function normalizeMessages(
+  messages: z.infer<typeof inboxResultSchema>["messages"],
+): InboundText[] {
+  return messages.map((message) => ({
+    id: message.id,
+    text: message.text,
+    receivedAt: message.receivedAt,
+    ...(message.attachments === undefined
+      ? {}
+      : { attachments: message.attachments }),
+  }));
 }

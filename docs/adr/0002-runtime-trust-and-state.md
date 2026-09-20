@@ -1,5 +1,6 @@
 # ADR 0002: Runtime, trust, and state
 
+Current product scope: [ADR 0009](0009-unified-messaging.md) supersedes the WeChat-only interface, mandatory Relay, text-only secretary, and full-access default described below.
 Status: accepted
 
 ## Decision

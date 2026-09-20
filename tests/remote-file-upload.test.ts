@@ -22,17 +22,25 @@ afterEach(async () => {
 
 describe("remote files stream through the relay without cloud persistence", () => {
   it("uploads bounded chunks, verifies the whole hash, sends once, and removes staging", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-remote-file-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-remote-file-"));
     directories.push(root);
     const source = join(root, "source.bin");
     const contents = Buffer.alloc(600 * 1024, 0x5a);
     await writeFile(source, contents);
-    const delivered: Buffer[] = [];
+    const delivered: Array<{
+      contents: Buffer;
+      channel: "wechat" | "feishu" | "both" | undefined;
+      mediaKind: "image" | "file" | undefined;
+    }> = [];
     const uploads = new HubRemoteFileUploads({
       temporaryDirectory: join(root, "uploads"),
       now: () => Date.parse("2026-08-24T08:00:00.000Z"),
       deliver: async (request) => {
-        delivered.push(await readFile(request.stagedPath));
+        delivered.push({
+          contents: await readFile(request.stagedPath),
+          channel: request.channel,
+          mediaKind: request.mediaKind,
+        });
         return {
           ok: true,
           command: "send",
@@ -58,19 +66,28 @@ describe("remote files stream through the relay without cloud persistence", () =
         fileName: "source.bin",
         byteLength: contents.byteLength,
         idempotencyKey: "file-1",
+        channel: "both",
+        mediaKind: "file",
       }),
     ).resolves.toMatchObject({
       ok: true,
       command: "send",
       result: { state: "accepted" },
     });
-    expect(delivered).toEqual([contents]);
+    expect(delivered).toEqual([
+      { contents, channel: "both", mediaKind: "file" },
+    ]);
     expect(commands.map(({ command }) => command)).toEqual([
       "file_begin",
       "file_chunk",
       "file_chunk",
       "file_commit",
     ]);
+    expect(commands.at(-1)).toMatchObject({
+      command: "file_commit",
+      channel: "both",
+      mediaKind: "file",
+    });
     expect(
       commands
         .filter((command) => command.command === "file_chunk")
@@ -84,7 +101,7 @@ describe("remote files stream through the relay without cloud persistence", () =
   });
 
   it("accepts an identical last-chunk retry but rejects changed offsets and hashes", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-remote-file-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-remote-file-"));
     directories.push(root);
     const uploads = new HubRemoteFileUploads({
       temporaryDirectory: join(root, "uploads"),

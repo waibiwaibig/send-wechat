@@ -14,7 +14,10 @@ async function pathExists(url: URL): Promise<boolean> {
   }
 }
 
-const skillRootUrl = new URL("../.agents/skills/send-wechat/", import.meta.url);
+const skillRootUrl = new URL(
+  "../.agents/skills/send-message/",
+  import.meta.url,
+);
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const execFileAsync = promisify(execFile);
 const npmPackCommand =
@@ -99,7 +102,7 @@ describe("Agent skill discovery contract", () => {
     };
     const skillUrl = new URL("SKILL.md", skillRootUrl);
     const legacySkillUrl = new URL(
-      "../skills/send-wechat/SKILL.md",
+      "../skills/send-message/SKILL.md",
       import.meta.url,
     );
 
@@ -138,7 +141,7 @@ describe("Agent skill discovery contract", () => {
     async () => {
       const packagePaths = await packedPaths();
       expect(packagePaths).toContain(
-        ".agents/skills/wechat-connection/SKILL.md",
+        ".agents/skills/message-connection/SKILL.md",
       );
       const linkedFiles = await linkedMarkdownFiles();
 

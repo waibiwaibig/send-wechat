@@ -33,6 +33,7 @@ const pairingInvitationPayloadSchema = z.strictObject({
 const resetPayloadSchema = z.strictObject({ command: z.literal("reset") });
 const sendTextPayloadSchema = z.strictObject({
   command: z.literal("send_text"),
+  channel: z.enum(["wechat", "feishu", "both"]).optional(),
   idempotencyKey: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/),
   text: z.string().refine((value) => {
     const length = Array.from(value).length;
@@ -41,6 +42,8 @@ const sendTextPayloadSchema = z.strictObject({
 });
 const sendFilePayloadSchema = z.strictObject({
   command: z.literal("send_file"),
+  channel: z.enum(["wechat", "feishu", "both"]).optional(),
+  mediaKind: z.enum(["image", "file"]).optional(),
   idempotencyKey: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/),
   fileName: z
     .string()
@@ -62,15 +65,18 @@ const consumerIdSchema = z
   .refine((value) => !/[\u0000-\u001f\u007f]/.test(value));
 const inboxPollPayloadSchema = z.strictObject({
   command: z.literal("inbox_poll"),
+  channel: z.enum(["wechat", "feishu"]).optional(),
   consumerId: consumerIdSchema,
 });
 const inboxAckPayloadSchema = z.strictObject({
   command: z.literal("inbox_ack"),
+  channel: z.enum(["wechat", "feishu"]).optional(),
   consumerId: consumerIdSchema,
   ids: z.array(z.string().min(1).max(256)).max(500),
 });
 const inboxReleasePayloadSchema = z.strictObject({
   command: z.literal("inbox_release"),
+  channel: z.enum(["wechat", "feishu"]).optional(),
   consumerId: consumerIdSchema,
 });
 
@@ -165,6 +171,8 @@ export type IpcServerRequest =
       byteLength: number;
       contentSha256: string;
       stagedPath: string;
+      channel?: "wechat" | "feishu" | "both" | undefined;
+      mediaKind?: "image" | "file" | undefined;
     };
 
 export type IpcEvent = z.infer<typeof ipcEventSchema>;
@@ -445,7 +453,7 @@ export class IpcServer {
           (entry) =>
             !entry.isDirectory() &&
             (/^[0-9a-f-]{36}\.upload$/.test(entry.name) ||
-              /^\.send-wechat-[0-9a-f-]{36}\.encrypted$/.test(entry.name)),
+              /^\.send-message-[0-9a-f-]{36}\.encrypted$/.test(entry.name)),
         )
         .map((entry) =>
           rm(`${this.options.tempDir}/${entry.name}`, { force: true }),

@@ -29,6 +29,12 @@ const installationSchema = z.discriminatedUnion("role", [
   z
     .object({
       schemaVersion: z.literal(1),
+      role: z.literal("local"),
+    })
+    .strict(),
+  z
+    .object({
+      schemaVersion: z.literal(1),
       role: z.literal("hub"),
       relayUrl,
       workerName: z

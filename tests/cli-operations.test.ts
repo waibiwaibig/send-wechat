@@ -126,6 +126,61 @@ describe("CLI operations", () => {
     expect(calls[1]?.[0]).toMatchObject({ command: "send_text" });
   });
 
+  it("passes channel selectors and explicit media kinds through CLI dispatch", async () => {
+    const root = await mkdtemp(join(tmpdir(), "send-message-cli-media-"));
+    try {
+      const imagePath = join(root, "photo.bin");
+      const filePath = join(root, "report.txt");
+      await writeFile(imagePath, "image");
+      await writeFile(filePath, "file");
+      const calls: Array<{ payload: unknown; filePath?: unknown }> = [];
+      const fake = context({
+        dispatch: async (...args) => {
+          calls.push({ payload: args[0], filePath: args[1] });
+          return { ok: true, command: "send", result: { state: "accepted" } };
+        },
+      });
+
+      await runCommand(fake as unknown as CliContext, "send", {
+        image: imagePath,
+        channel: "both",
+        idempotencyKey: "image-1",
+      });
+      await runCommand(fake as unknown as CliContext, "send", {
+        file: filePath,
+        channel: "feishu",
+        idempotencyKey: "file-1",
+      });
+
+      expect(calls).toEqual([
+        {
+          payload: {
+            command: "send_file",
+            idempotencyKey: "image-1",
+            fileName: "photo.bin",
+            byteLength: 5,
+            mediaKind: "image",
+            channel: "both",
+          },
+          filePath: imagePath,
+        },
+        {
+          payload: {
+            command: "send_file",
+            idempotencyKey: "file-1",
+            fileName: "report.txt",
+            byteLength: 4,
+            mediaKind: "file",
+            channel: "feishu",
+          },
+          filePath,
+        },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reads and trims a pairing invitation from stdin", async () => {
     const calls: unknown[] = [];
     const invitation = new PairingInvitations().issue(
@@ -169,7 +224,7 @@ describe("CLI operations", () => {
   });
 
   it("validates send input, file safety, and idempotency keys before IPC", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-operations-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-operations-"));
     try {
       const calls: unknown[] = [];
       const fake = context({

@@ -120,14 +120,14 @@ function resolvePosixPaths(
   if (platform === "darwin") {
     if (!path.posix.isAbsolute(homeDir))
       unsupported("homeDir must be absolute");
-    stateDir = join(homeDir, "Library", "Application Support", "send-wechat");
-    logDir = join(homeDir, "Library", "Logs", "send-wechat");
+    stateDir = join(homeDir, "Library", "Application Support", "send-message");
+    logDir = join(homeDir, "Library", "Logs", "send-message");
     runDir = join(stateDir, "run");
     serviceConfigPath = join(
       homeDir,
       "Library",
       "LaunchAgents",
-      "io.github.waibiwaibig.send-wechat.plist",
+      "io.github.waibiwaibig.send-message.plist",
     );
   } else {
     assertLinuxGlibc(platform, libc);
@@ -147,22 +147,22 @@ function resolvePosixPaths(
     ) {
       unsupported("Linux home and XDG directories must be absolute");
     }
-    stateDir = join(stateHome, "send-wechat");
+    stateDir = join(stateHome, "send-message");
     logDir = join(stateDir, "logs");
     runDir =
       runtimeDir !== undefined && runtimeDir.length > 0
-        ? join(runtimeDir, "send-wechat")
+        ? join(runtimeDir, "send-message")
         : join(stateDir, "run");
     serviceConfigPath = join(
       homeDir,
       ".config",
       "systemd",
       "user",
-      "send-wechat.service",
+      "send-message.service",
     );
   }
 
-  const socketPath = join(runDir, "send-wechat.sock");
+  const socketPath = join(runDir, "send-message.sock");
   return {
     platform,
     arch,
@@ -220,9 +220,9 @@ export function resolvePlatformPaths(
     unsupported("LOCALAPPDATA must be absolute on Windows");
   }
   const join = (...parts: string[]): string => path.win32.join(...parts);
-  const stateDir = join(localAppData, "send-wechat");
+  const stateDir = join(localAppData, "send-message");
   const runDir = join(stateDir, "run");
-  const socketPath = `\\\\.\\pipe\\send-wechat-${createHash("sha256")
+  const socketPath = `\\\\.\\pipe\\send-message-${createHash("sha256")
     .update(
       `${input.username.toLowerCase()}\0${path.win32.resolve(localAppData).toLowerCase()}`,
       "utf8",

@@ -17,6 +17,7 @@ import type { InboundText } from "../src/messaging/text-inbox.js";
 type StartCall = {
   threadId: string;
   text: string;
+  attachments?: InboundText["attachments"];
   turnId: string;
 };
 
@@ -101,11 +102,12 @@ class FakeCodexPort implements CodexPort {
     text: string,
     selection?: ModelSelection,
     permission?: GatewayPermission,
+    attachments?: InboundText["attachments"],
   ): Promise<string> {
     this.selections.push(selection);
     this.permissions.push(permission);
     const turnId = `turn-${this.startCalls.length + 1}`;
-    this.startCalls.push({ threadId, text, turnId });
+    this.startCalls.push({ threadId, text, attachments, turnId });
     if (this.nextStartError !== undefined) {
       const error = this.nextStartError;
       this.nextStartError = undefined;
@@ -313,14 +315,14 @@ describe("GatewayController", () => {
     expect(first.codex.selections).toEqual([
       { model: "gpt-6-astra", effort: "low" },
     ]);
-    expect(first.codex.permissions).toEqual(["full"]);
+    expect(first.codex.permissions).toEqual(["workspace"]);
     await finishTurn(first.codex, first.codex.startCalls[0]!, "done");
     await first.controller.close();
     const second = makeHarness(first.store.snapshot(), 2);
     await second.controller.initialize();
     await second.controller.accept([message("new", "/newchat")]);
     expect(second.sent.at(-1)?.text).toContain("gpt-6-astra · low");
-    expect(second.sent.at(-1)?.text).toContain("完全访问");
+    expect(second.sent.at(-1)?.text).toContain("工作区写入");
     await second.controller.accept([message("input-2", "continue")]);
     expect(second.codex.selections).toEqual([
       { model: "gpt-6-astra", effort: "low" },
@@ -349,7 +351,7 @@ describe("GatewayController", () => {
       message("new", "/newchat"),
       message("next", "read"),
     ]);
-    expect(harness.codex.permissions).toEqual(["full", "read-only"]);
+    expect(harness.codex.permissions).toEqual(["workspace", "read-only"]);
     expect(harness.sent.map(({ text }) => text).join("\n")).toContain(
       "当前权限：只读",
     );
@@ -579,7 +581,12 @@ describe("GatewayController", () => {
     await first.controller.accept([message("m1", "first")]);
     expect(first.codex.createdThreads).toEqual(["thread-1"]);
     expect(first.codex.startCalls).toEqual([
-      { threadId: "thread-1", text: "first", turnId: "turn-1" },
+      {
+        threadId: "thread-1",
+        text: "first",
+        attachments: [],
+        turnId: "turn-1",
+      },
     ]);
     await finishTurn(first.codex, first.codex.startCalls[0]!, "reply one");
 
@@ -917,6 +924,30 @@ describe("GatewayController", () => {
 
     expect(harness.codex.startCalls).toHaveLength(1);
     expect(harness.codex.startCalls[0]?.text).toBe("first\n\nsecond\n\nthird");
+  });
+
+  it("keeps attachments with the turn input after startTurn awaits", async () => {
+    const harness = makeHarness();
+    harness.codex.deferNextStart();
+    await harness.controller.initialize();
+    const accepted = harness.controller.accept([
+      {
+        id: "attachment-message",
+        text: "describe these",
+        receivedAt: 1,
+        attachments: [
+          { type: "image", path: "/tmp/image.png", fileName: "image.png" },
+          { type: "file", path: "/tmp/report.pdf", fileName: "report.pdf" },
+        ],
+      },
+    ]);
+    await waitFor(() => harness.codex.startCalls.length === 1);
+    expect(harness.codex.startCalls[0]?.attachments).toEqual([
+      { type: "image", path: "/tmp/image.png", fileName: "image.png" },
+      { type: "file", path: "/tmp/report.pdf", fileName: "report.pdf" },
+    ]);
+    harness.codex.resolveDeferredStart("turn-1");
+    await accepted;
   });
 
   it("keeps /newchat as a command boundary between ordinary groups", async () => {

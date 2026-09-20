@@ -1,4 +1,11 @@
 import {
+  MessageConfigStore,
+  FeishuCredentialStore,
+  feishuConfigurationSchema,
+  type MessageConfig,
+} from "../messaging/config.js";
+import { FeishuClient } from "../feishu/client.js";
+import {
   randomBytes as cryptoRandomBytes,
   randomUUID as cryptoRandomUUID,
 } from "node:crypto";
@@ -192,7 +199,7 @@ export class CliContext {
     const installation = await new JsonInstallationStore(
       this.getPaths().installationFile,
     ).load();
-    if (installation === null || installation.role === "hub")
+    if (installation?.role !== "client")
       return await this.ipc(payload, filePath);
     const credential = await selectRelayCredentialStore(
       this.getPaths(),
@@ -224,6 +231,10 @@ export class CliContext {
         fileName: payload.fileName,
         byteLength: payload.byteLength,
         idempotencyKey: payload.idempotencyKey,
+        ...(payload.channel === undefined ? {} : { channel: payload.channel }),
+        ...(payload.mediaKind === undefined
+          ? {}
+          : { mediaKind: payload.mediaKind }),
       });
     }
     return await client.execute(
@@ -233,6 +244,9 @@ export class CliContext {
             command: "send_text",
             idempotencyKey: payload.idempotencyKey,
             text: payload.text,
+            ...(payload.channel === undefined
+              ? {}
+              : { channel: payload.channel }),
           },
     );
   }
@@ -248,7 +262,7 @@ export class CliContext {
       throw new SetupCoordinatorError("CLIENT_HAS_NO_SERVICE");
   }
 
-  public async readStdin(): Promise<string> {
+  public async readStdin(maximumBytes = 16_000): Promise<string> {
     const chunks: Buffer[] = [];
     let byteLength = 0;
     for await (const chunk of this.io.stdin as AsyncIterable<
@@ -257,7 +271,7 @@ export class CliContext {
       const buffer =
         typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk);
       byteLength += buffer.byteLength;
-      if (byteLength > 16_000) {
+      if (byteLength > maximumBytes) {
         const error = new Error("INVALID_TEXT") as Error & { code: string };
         error.code = "INVALID_TEXT";
         throw error;
@@ -375,6 +389,66 @@ export class CliContext {
     const clientFlow =
       existingInstallation?.role === "client" ||
       (options.pair !== undefined && existingInstallation === null);
+    if (
+      clientFlow &&
+      (options.channels !== undefined ||
+        options.defaultChannel !== undefined ||
+        options.feishuConfigStdin === true ||
+        options.relay === true)
+    )
+      throw new SetupCoordinatorError("CLIENT_HAS_NO_SERVICE");
+    let messageConfig: MessageConfig | null = null;
+    if (!clientFlow) {
+      const store = new MessageConfigStore(paths.stateDir);
+      const previous = await store.load();
+      const selected = options.channels;
+      if (selected === undefined && previous === null)
+        throw new SetupCoordinatorError("CHANNEL_SELECTION_REQUIRED");
+      const channels =
+        selected === undefined
+          ? previous!.channels
+          : selected === "both"
+            ? (["wechat", "feishu"] as const)
+            : [selected];
+      const defaultChannel =
+        options.defaultChannel ??
+        (channels.length === 1 ? channels[0] : previous?.defaultChannel);
+      if (defaultChannel === undefined || !channels.includes(defaultChannel))
+        throw new SetupCoordinatorError("DEFAULT_CHANNEL_REQUIRED");
+      messageConfig = {
+        schemaVersion: 1,
+        channels: [...channels],
+        defaultChannel,
+      };
+      if (channels.includes("feishu")) {
+        const secrets = new FeishuCredentialStore();
+        if (options.feishuConfigStdin) {
+          if (options.pairStdin) throw new SetupCoordinatorError("USAGE_ERROR");
+          const parsed = feishuConfigurationSchema.safeParse(
+            JSON.parse(await this.readStdin()),
+          );
+          if (!parsed.success)
+            throw new SetupCoordinatorError("FEISHU_CONFIGURATION_INVALID");
+          const candidate = new FeishuClient(parsed.data, parsed.data);
+          await candidate.verify();
+          await secrets.save(parsed.data);
+        } else {
+          const existing = await secrets.load();
+          if (existing === null)
+            throw new SetupCoordinatorError("FEISHU_CONFIGURATION_REQUIRED");
+          await new FeishuClient(existing, existing).verify();
+        }
+      }
+      await store.save(messageConfig);
+      if (
+        previous !== null &&
+        (options.feishuConfigStdin === true ||
+          JSON.stringify(previous) !== JSON.stringify(messageConfig))
+      ) {
+        const service = this.getServiceManager();
+        if ((await service.status()).running) await service.restart();
+      }
+    }
     const provisioner = new CloudflareProvisioner({
       temporaryRoot: paths.tempDir,
       selectAccount: async (accounts) =>
@@ -467,6 +541,8 @@ export class CliContext {
     return await coordinator.setup({
       ...(options.pair === undefined ? {} : { pair: options.pair }),
       ...(options.pairStdout === true ? { issueInvitation: true } : {}),
+      ...(options.relay === true ? { relay: true } : {}),
+      loginWechat: messageConfig?.channels.includes("wechat") ?? false,
       onEvent,
       onVerifyCode,
       onAwaitingMessage,

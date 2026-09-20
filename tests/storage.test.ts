@@ -54,7 +54,7 @@ function validState(): PersistedState {
 
 describe("owner-only state store", () => {
   it("round-trips schema v1 atomically with private permissions", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "send-wechat-state-test-"));
+    const directory = await mkdtemp(join(tmpdir(), "send-message-state-test-"));
     directories.push(directory);
     const file = join(directory, "state.json");
     const store = new JsonStateStore(file);
@@ -70,7 +70,7 @@ describe("owner-only state store", () => {
   });
 
   it("rejects incompatible state instead of migrating or falling back", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "send-wechat-state-test-"));
+    const directory = await mkdtemp(join(tmpdir(), "send-message-state-test-"));
     directories.push(directory);
     const file = join(directory, "state.json");
     await chmod(directory, 0o700);
@@ -87,7 +87,7 @@ describe("owner-only state store", () => {
 
   it("returns null for a missing state and rejects malformed JSON, unsafe permissions, and invalid schema", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "send-wechat-state-errors-"),
+      join(tmpdir(), "send-message-state-errors-"),
     );
     directories.push(directory);
     const file = join(directory, "state.json");
@@ -113,7 +113,7 @@ describe("owner-only state store", () => {
 
   it("rejects an invalid state on save and removes the state on delete", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "send-wechat-state-delete-"),
+      join(tmpdir(), "send-message-state-delete-"),
     );
     directories.push(directory);
     const file = join(directory, "state.json");
@@ -159,7 +159,7 @@ describe("native credential-store adapter", () => {
     expect(await store.load()).toEqual(secret);
     await store.delete();
     expect(await store.load()).toBeNull();
-    expect(entries.every((entry) => entry.service === "send-wechat")).toBe(
+    expect(entries.every((entry) => entry.service === "send-message")).toBe(
       true,
     );
     expect(entries.every((entry) => entry.account === "binding")).toBe(true);
@@ -224,10 +224,10 @@ describe("native credential-store adapter", () => {
 
 describe("metadata-only audit log", () => {
   it("writes only the declared safe fields and prunes files older than seven days", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "send-wechat-log-test-"));
+    const directory = await mkdtemp(join(tmpdir(), "send-message-log-test-"));
     directories.push(directory);
     const now = Date.parse("2026-08-24T12:00:00.000Z");
-    await writeFile(join(directory, "send-wechat-2026-08-10.jsonl"), "old\n", {
+    await writeFile(join(directory, "send-message-2026-08-10.jsonl"), "old\n", {
       mode: 0o600,
     });
     const log = new JsonAuditLog({
@@ -247,7 +247,7 @@ describe("metadata-only audit log", () => {
     });
 
     const names = await readdir(directory);
-    expect(names).toEqual(["send-wechat-2026-08-24.jsonl"]);
+    expect(names).toEqual(["send-message-2026-08-24.jsonl"]);
     const contents = await readFile(join(directory, names[0]!), "utf8");
     expect(JSON.parse(contents)).toEqual({
       timestamp: "2026-08-24T12:00:00.000Z",
@@ -262,7 +262,7 @@ describe("metadata-only audit log", () => {
   });
 
   it("rejects unsafe audit metadata and makes room for a bounded log", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "send-wechat-log-errors-"));
+    const directory = await mkdtemp(join(tmpdir(), "send-message-log-errors-"));
     directories.push(directory);
     const event = {
       timestamp: "2026-08-24T12:00:00.000Z",
@@ -298,12 +298,12 @@ describe("metadata-only audit log", () => {
     ).rejects.toBeInstanceOf(UnsafeAuditEventError);
 
     await writeFile(
-      join(directory, "send-wechat-2026-08-23.jsonl"),
+      join(directory, "send-message-2026-08-23.jsonl"),
       "x".repeat(450),
       { mode: 0o600 },
     );
     await writeFile(
-      join(directory, "send-wechat-2026-08-22.jsonl"),
+      join(directory, "send-message-2026-08-22.jsonl"),
       "y".repeat(10),
       { mode: 0o600 },
     );

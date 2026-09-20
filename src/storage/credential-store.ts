@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { CredentialStore } from "../runtime/ports.js";
 import type { SecretBundle } from "../runtime/state.js";
 
-const SERVICE = "send-wechat";
+const SERVICE = "send-message";
 const ACCOUNT = "binding";
 
 const secretSchema = z

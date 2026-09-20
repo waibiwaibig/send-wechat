@@ -1,3 +1,7 @@
+import {
+  FeishuCredentialStore,
+  MessageConfigStore,
+} from "../messaging/config.js";
 import { lstat, readdir, rmdir, unlink } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
@@ -32,7 +36,7 @@ export async function assertLocalClientResetAllowed(
     // malformed or unreadable installation files still propagate below.
     if ((error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
   }
-  if (installation?.role === "hub")
+  if (installation?.role === "hub" || installation?.role === "local")
     throw new LocalClientResetError("RESET_LOCAL_HUB_STATE");
   if (
     (await pathExists(paths.stateFile)) ||
@@ -103,7 +107,11 @@ export async function resetOwnerData(
       installation?.role === "client" ? "client" : "hub",
     );
   }
+  const config = await new MessageConfigStore(paths.stateDir).load();
   const credentialDeletion = await Promise.allSettled([
+    ...(installation?.role !== "client" && config?.channels.includes("feishu")
+      ? [new FeishuCredentialStore().delete()]
+      : []),
     credentialStore.delete(),
     relayCredentialStore.delete(),
   ]);

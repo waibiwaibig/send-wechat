@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { APP_VERSION } from "../app/version.js";
+import type { Channel } from "../messaging/channel-router.js";
 
 export type ModelSelection = {
   model: string;
@@ -17,6 +18,12 @@ export type CodexModel = {
 };
 
 export type GatewayPermission = "full" | "workspace" | "read-only";
+
+export type CodexAttachment = {
+  type: "image" | "file";
+  path: string;
+  fileName: string;
+};
 
 export type CodexEvent =
   | {
@@ -56,6 +63,7 @@ export interface CodexPort {
     text: string,
     selection?: ModelSelection,
     permission?: GatewayPermission,
+    attachments?: readonly CodexAttachment[],
   ): Promise<string>;
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   onEvent(listener: (event: CodexEvent) => void): () => void;
@@ -65,6 +73,7 @@ export interface CodexPort {
 export type CodexAppServerOptions = {
   executable: string;
   cwd: string;
+  channel: Channel;
   args?: string[];
   env?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
@@ -109,16 +118,17 @@ const KNOWN_UNFULFILLABLE_METHODS = new Set([
   "attestation/generate",
 ]);
 
-const WECHAT_CONNECTION_SKILL_PATH = fileURLToPath(
-  new URL("../../.agents/skills/wechat-connection/SKILL.md", import.meta.url),
+const MESSAGE_CONNECTION_SKILL_PATH = fileURLToPath(
+  new URL("../../.agents/skills/message-connection/SKILL.md", import.meta.url),
 );
-const WECHAT_CONNECTION_SKILL_ROOT = fileURLToPath(
+const MESSAGE_CONNECTION_SKILL_ROOT = fileURLToPath(
   new URL("../../.agents/skills", import.meta.url),
 );
 
 export class CodexAppServer implements CodexPort {
   private readonly executable: string;
   private readonly cwd: string;
+  private readonly channel: Channel;
   private readonly args: string[];
   private readonly env: NodeJS.ProcessEnv;
   private readonly requestTimeoutMs: number;
@@ -137,6 +147,7 @@ export class CodexAppServer implements CodexPort {
   constructor(options: CodexAppServerOptions) {
     this.executable = options.executable;
     this.cwd = options.cwd;
+    this.channel = options.channel;
     this.args = options.args ? [...options.args] : [...DEFAULT_ARGS];
     this.env = options.env ?? process.env;
     this.requestTimeoutMs =
@@ -241,17 +252,33 @@ export class CodexAppServer implements CodexPort {
     text: string,
     selection?: ModelSelection,
     permission?: GatewayPermission,
+    attachments?: readonly CodexAttachment[],
   ): Promise<string> {
     const input: JsonObject[] = [];
     const needsBootstrapSkill = this.newlyCreatedThreadIds.has(threadId);
     if (needsBootstrapSkill) {
       input.push({
         type: "skill",
-        name: "wechat-connection",
-        path: WECHAT_CONNECTION_SKILL_PATH,
+        name: "message-connection",
+        path: MESSAGE_CONNECTION_SKILL_PATH,
       });
     }
-    input.push({ type: "text", text });
+    for (const attachment of attachments ?? []) {
+      if (attachment.type === "image")
+        input.push({ type: "localImage", path: attachment.path });
+    }
+    const filePaths = (attachments ?? [])
+      .filter((attachment) => attachment.type === "file")
+      .map((attachment) => attachment.path);
+    const fileText =
+      filePaths.length === 0
+        ? ""
+        : `\n\n本地文件附件路径（请直接读取）：\n${filePaths.join("\n")}`;
+    if (text.length > 0 || fileText.length > 0)
+      input.push({
+        type: "text",
+        text: `当前消息渠道：${this.channel}\n${text}${fileText}`,
+      });
 
     const params: JsonObject = {
       threadId,
@@ -370,8 +397,8 @@ export class CodexAppServer implements CodexPort {
     try {
       await this.request("initialize", {
         clientInfo: {
-          name: "send-wechat-gateway",
-          title: "send-wechat Codex gateway",
+          name: "send-message-gateway",
+          title: "send-message Codex gateway",
           version: APP_VERSION,
         },
         capabilities: {
@@ -381,7 +408,7 @@ export class CodexAppServer implements CodexPort {
       });
       this.sendNotification("initialized");
       await this.request("skills/extraRoots/set", {
-        extraRoots: [WECHAT_CONNECTION_SKILL_ROOT],
+        extraRoots: [MESSAGE_CONNECTION_SKILL_ROOT],
       });
       this.state = "connected";
     } catch (error) {

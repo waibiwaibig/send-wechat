@@ -2,6 +2,7 @@ import type { InboundText } from "../messaging/text-inbox.js";
 import type {
   CodexEvent,
   CodexPort,
+  CodexAttachment,
   ModelSelection,
   GatewayPermission,
 } from "./codex-client.js";
@@ -37,6 +38,7 @@ type PendingStart = {
   epoch: number;
   events: CodexEvent[];
   textBytes: number;
+  attachments: readonly CodexAttachment[];
 };
 
 export type GatewayControllerOptions = {
@@ -44,6 +46,7 @@ export type GatewayControllerOptions = {
   store: GatewayStateStore;
   send: SendGatewayText;
   onError?: (code: string) => void;
+  initialPermission?: GatewayPermission;
   interruptTimeoutMs?: number;
   outputIdleMs?: number;
 };
@@ -153,20 +156,19 @@ export class GatewayController {
 
     const groups: InboundText[][] = [];
     for (const message of fresh) {
-      if (parseGatewayCommand(message.text) !== null) groups.push([message]);
+      if (isCommandMessage(message)) groups.push([message]);
       else {
         const previous = groups.at(-1);
-        if (
-          previous === undefined ||
-          parseGatewayCommand(previous[0]!.text) !== null
-        )
+        if (previous === undefined || isCommandMessage(previous[0]!))
           groups.push([message]);
         else previous.push(message);
       }
     }
 
     for (const group of groups) {
-      const command = parseGatewayCommand(group[0]!.text);
+      const command = isCommandMessage(group[0]!)
+        ? parseGatewayCommand(group[0]!.text ?? "")
+        : null;
       this.state.pending = group.map((message) => message.id);
       await this.options.store.save(this.state);
       this.error = null;
@@ -201,7 +203,11 @@ export class GatewayController {
             }
             await this.start(
               threadId,
-              group.map((message) => message.text).join("\n\n"),
+              group
+                .map((message) => message.text ?? "")
+                .filter((text) => text.length > 0)
+                .join("\n\n"),
+              group.flatMap((message) => message.attachments ?? []),
             );
           }
         }
@@ -244,7 +250,9 @@ export class GatewayController {
   }
 
   private permission(): GatewayPermission {
-    return this.state.permission ?? "full";
+    return (
+      this.state.permission ?? this.options.initialPermission ?? "workspace"
+    );
   }
 
   private streamEnabled(): boolean {
@@ -336,12 +344,17 @@ export class GatewayController {
     await output.close();
   }
 
-  private async start(threadId: string, text: string): Promise<void> {
+  private async start(
+    threadId: string,
+    text: string,
+    attachments: readonly CodexAttachment[],
+  ): Promise<void> {
     const pending: PendingStart = {
       threadId,
       epoch: this.epoch,
       events: [],
       textBytes: 0,
+      attachments,
     };
     this.pendingStart = pending;
     try {
@@ -350,6 +363,7 @@ export class GatewayController {
         text,
         await this.selection(),
         this.permission(),
+        pending.attachments,
       );
       let finish!: () => void;
       const done = new Promise<void>((resolve) => {
@@ -466,4 +480,11 @@ export class GatewayController {
     this.error = code;
     this.options.onError?.(code);
   }
+}
+
+function isCommandMessage(message: InboundText): boolean {
+  return (
+    (message.attachments === undefined || message.attachments.length === 0) &&
+    parseGatewayCommand(message.text ?? "") !== null
+  );
 }

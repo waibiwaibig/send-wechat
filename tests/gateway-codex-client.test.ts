@@ -1,4 +1,7 @@
 import { fileURLToPath } from "node:url";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -14,15 +17,18 @@ const fixture = fileURLToPath(
   new URL("./fixtures/gateway-fake-codex.mjs", import.meta.url),
 );
 const clients: CodexAppServer[] = [];
+const roots: string[] = [];
 
 function makeClient(
   mode = "normal",
   requestTimeoutMs = 1_000,
   permission?: GatewayPermission,
+  captureFile?: string,
 ): CodexAppServer {
   const client = new CodexAppServer({
     executable: process.execPath,
     cwd: process.cwd(),
+    channel: "wechat",
     args: [fixture],
     env: {
       ...process.env,
@@ -30,6 +36,9 @@ function makeClient(
       ...(permission === undefined
         ? {}
         : { FAKE_CODEX_PERMISSION: permission }),
+      ...(captureFile === undefined
+        ? {}
+        : { FAKE_CODEX_CAPTURE_FILE: captureFile }),
     },
     requestTimeoutMs,
   });
@@ -39,6 +48,9 @@ function makeClient(
 
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
+  await Promise.all(
+    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+  );
 });
 
 describe("Codex app-server stdio gateway", () => {
@@ -176,6 +188,42 @@ describe("Codex app-server stdio gateway", () => {
       effort: "medium",
     });
     await expect(client.startTurn(threadId, "hello")).resolves.toBe("turn-1");
+  });
+
+  it("encodes image inputs and file paths with the channel context", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gateway-codex-capture-"));
+    roots.push(root);
+    const captureFile = path.join(root, "capture.jsonl");
+    const client = makeClient("normal", 1_000, undefined, captureFile);
+    await client.connect();
+    const threadId = await client.createThread();
+    await expect(
+      client.startTurn(threadId, "inspect", undefined, undefined, [
+        { type: "image", path: "/tmp/photo.png", fileName: "photo.png" },
+        { type: "file", path: "/tmp/notes.txt", fileName: "notes.txt" },
+      ]),
+    ).resolves.toBe("turn-1");
+    const requests = (await readFile(captureFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            method: string;
+            params?: Record<string, unknown>;
+          },
+      );
+    const turn = requests.find((request) => request.method === "turn/start");
+    expect(turn?.params?.input).toEqual([
+      expect.objectContaining({ type: "skill" }),
+      { type: "localImage", path: "/tmp/photo.png" },
+      {
+        type: "text",
+        text: expect.stringContaining(
+          "当前消息渠道：wechat\ninspect\n\n本地文件附件路径（请直接读取）：\n/tmp/notes.txt",
+        ),
+      },
+    ]);
   });
 
   it("consumes the bootstrap skill before a failed dispatch", async () => {
@@ -602,6 +650,7 @@ describe("Codex app-server stdio gateway", () => {
         new CodexAppServer({
           executable: process.execPath,
           cwd: process.cwd(),
+          channel: "wechat",
           requestTimeoutMs: 0,
         }),
     ).toThrow("requestTimeoutMs must be a positive finite number");

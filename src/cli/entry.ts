@@ -1,4 +1,12 @@
 #!/usr/bin/env node
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { configureNotifications } from "../notifications/install.js";
+import {
+  runNotificationHook,
+  type NotificationChannel,
+} from "../notifications/hook.js";
 
 import { Command, CommanderError, Option } from "commander";
 
@@ -25,8 +33,8 @@ function buildProgram(
 ): Command {
   const program = new Command();
   program
-    .name("send-wechat")
-    .description("Send text or files to the one Weixin user bound by QR login.")
+    .name("send-message")
+    .description("Send messages through configured WeChat and Feishu channels.")
     .version(APP_VERSION)
     .helpCommand(false)
     .option("--json", "emit one JSON result")
@@ -61,6 +69,23 @@ function buildProgram(
       new Option("--pair-stdout", "write a raw pairing invitation to stdout"),
     )
     .option("--qr-file <path>", "write QR as PNG")
+    .addOption(
+      new Option("--channels <channels>", "channels to configure").choices([
+        "wechat",
+        "feishu",
+        "both",
+      ]),
+    )
+    .addOption(
+      new Option("--default-channel <channel>", "default send channel").choices(
+        ["wechat", "feishu"],
+      ),
+    )
+    .option(
+      "--feishu-config-stdin",
+      "read Feishu application configuration JSON securely from stdin",
+    )
+    .option("--relay", "enable a personal Relay for additional devices")
     .action(async (options: Record<string, unknown>) => {
       // Commander derives the boolean option key `pair`; normalize it at the
       // CLI boundary so SetupOptions can keep its internal `pair: string`
@@ -77,6 +102,14 @@ function buildProgram(
     .option("--text <text>", "text to send")
     .option("--stdin", "read text from stdin")
     .option("--file <path>", "file to send")
+    .option("--image <path>", "image to send")
+    .addOption(
+      new Option("--channel <channel>", "explicit channel selection").choices([
+        "wechat",
+        "feishu",
+        "both",
+      ]),
+    )
     .option("--idempotency-key <key>", "local duplicate-suppression key")
     .action(action("send"));
   program.command("status").action(action("status"));
@@ -115,6 +148,60 @@ function buildProgram(
   program.command("internal-daemon", { hidden: true }).action(async () => {
     await context.runDaemon();
   });
+  program
+    .command("notifications")
+    .option("--enable", "enable Codex root task notifications")
+    .option("--disable", "disable this tool's Codex notification hooks")
+    .addOption(
+      new Option("--channel <channel>", "notification channel").choices([
+        "wechat",
+        "feishu",
+        "both",
+      ]),
+    )
+    .action(
+      async (options: {
+        enable?: boolean;
+        disable?: boolean;
+        channel?: NotificationChannel;
+      }) => {
+        if (Boolean(options.enable) === Boolean(options.disable))
+          throw new CliFailure("USAGE_ERROR", 2);
+        const result = await configureNotifications({
+          codexHome: process.env.CODEX_HOME ?? join(homedir(), ".codex"),
+          enabled: options.enable === true,
+          cliEntry: fileURLToPath(new URL("./bin.js", import.meta.url)),
+          nodeExecutable: process.execPath,
+          ...(options.channel === undefined
+            ? {}
+            : { channel: options.channel }),
+        });
+        await onResult("notifications", {
+          ok: true,
+          command: "notifications",
+          result,
+        });
+      },
+    );
+  program
+    .command("internal-notification-hook", { hidden: true })
+    .option("--owner-marker <marker>")
+    .addOption(
+      new Option("--channel <channel>").choices(["wechat", "feishu", "both"]),
+    )
+    .action(async (options: { channel?: NotificationChannel }) => {
+      await runNotificationHook(await context.readStdin(1024 * 1024), {
+        statePath: join(
+          process.env.CODEX_HOME ?? join(homedir(), ".codex"),
+          "hooks",
+          "send-message",
+          "state.sqlite3",
+        ),
+        cliEntry: fileURLToPath(new URL("./bin.js", import.meta.url)),
+        nodeExecutable: process.execPath,
+        ...(options.channel === undefined ? {} : { channel: options.channel }),
+      });
+    });
   return program;
 }
 
@@ -149,7 +236,7 @@ export async function runCli(
     "internal-daemon",
   ]);
   let commandName =
-    argv.find((argument) => commands.has(argument)) ?? "send-wechat";
+    argv.find((argument) => commands.has(argument)) ?? "send-message";
   let actionExitCode = 0;
   try {
     ensureNodeVersion(dependencies.nodeVersion ?? process.versions.node);
@@ -178,7 +265,11 @@ export async function runCli(
         if (globalOptions.json === true) {
           await writeOutput(io.stdout, `${JSON.stringify(finalResult)}\n`);
         } else if (failed) {
-          if (command === "doctor") {
+          if (
+            command === "doctor" ||
+            (isRecord(finalResult.result) &&
+              isRecord(finalResult.result.channels))
+          ) {
             await writeOutput(
               io.stdout,
               humanSuccess(command, result, globalOptions.lang ?? "zh-CN"),
@@ -200,7 +291,7 @@ export async function runCli(
         }
       },
     );
-    await program.parseAsync(["node", "send-wechat", ...argv]);
+    await program.parseAsync(["node", "send-message", ...argv]);
     return actionExitCode;
   } catch (error) {
     if (error instanceof CommanderError) {

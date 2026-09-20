@@ -36,18 +36,18 @@ function harness(overrides: CliDependencies = {}) {
         platform: "darwin",
         arch: "arm64",
         username: "test",
-        stateDir: "/tmp/send-wechat-state",
-        logDir: "/tmp/send-wechat-log",
-        runDir: "/tmp/send-wechat-run",
-        socketPath: "/tmp/send-wechat-run/send-wechat.sock",
-        ipcEndpoint: "/tmp/send-wechat-run/send-wechat.sock",
-        stateFile: "/tmp/send-wechat-state/state.json",
-        installationFile: "/tmp/send-wechat-state/installation.json",
-        idempotencyFile: "/tmp/send-wechat-state/idempotency.sqlite3",
-        capabilityFile: "/tmp/send-wechat-state/capability",
-        clientCredentialFile: "/tmp/send-wechat-state/client-credential.json",
-        tempDir: "/tmp/send-wechat-state/tmp",
-        serviceConfigPath: "/tmp/send-wechat-service.plist",
+        stateDir: "/tmp/send-message-state",
+        logDir: "/tmp/send-message-log",
+        runDir: "/tmp/send-message-run",
+        socketPath: "/tmp/send-message-run/send-message.sock",
+        ipcEndpoint: "/tmp/send-message-run/send-message.sock",
+        stateFile: "/tmp/send-message-state/state.json",
+        installationFile: "/tmp/send-message-state/installation.json",
+        idempotencyFile: "/tmp/send-message-state/idempotency.sqlite3",
+        capabilityFile: "/tmp/send-message-state/capability",
+        clientCredentialFile: "/tmp/send-message-state/client-credential.json",
+        tempDir: "/tmp/send-message-state/tmp",
+        serviceConfigPath: "/tmp/send-message-service.plist",
       },
       loadCapability: overrides.loadCapability ?? (async () => "a".repeat(64)),
       setup:
@@ -336,7 +336,7 @@ describe("public CLI", () => {
     expect(JSON.parse(structured.output().stdout)).toEqual({
       schemaVersion: 1,
       ok: false,
-      command: "send-wechat",
+      command: "send-message",
       error: { code: "USAGE_ERROR", retryable: false },
     });
     expect(structured.output().stderr).toBe("");
@@ -439,7 +439,7 @@ describe("public CLI", () => {
   });
 
   it("creates a QR file exclusively and refreshes only its own file", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-qr-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-qr-"));
     const qrFile = join(root, "login.png");
     const fixture = harness({
       randomUUID: () => "refresh",
@@ -468,7 +468,7 @@ describe("public CLI", () => {
   });
 
   it("does not overwrite a pre-existing QR path", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-qr-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-qr-"));
     const qrFile = join(root, "login.png");
     await writeFile(qrFile, "keep");
     const fixture = harness({
@@ -623,7 +623,7 @@ describe("public CLI", () => {
   });
 
   it("validates regular file metadata and sends its basename", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-cli-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-cli-"));
     const file = join(root, "message.txt");
     await writeFile(file, "hello");
     let request: RequestIpcCapture | undefined;
@@ -647,7 +647,7 @@ describe("public CLI", () => {
   it.skipIf(process.platform === "win32")(
     "rejects file names containing a foreign-platform separator",
     async () => {
-      const root = await mkdtemp(join(tmpdir(), "send-wechat-cli-"));
+      const root = await mkdtemp(join(tmpdir(), "send-message-cli-"));
       const file = join(root, "unsafe\\name.txt");
       await writeFile(file, "hello");
       const fixture = harness();

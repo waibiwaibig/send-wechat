@@ -7,7 +7,7 @@ const MAX_FRAME_BYTES = 1_048_576;
 const skillRootSuffix = join(".agents", "skills");
 const connectionSkillSuffix = join(
   skillRootSuffix,
-  "wechat-connection",
+  "message-connection",
   "SKILL.md",
 );
 const skillRootPathSuffix = `${sep}${skillRootSuffix}`;
@@ -235,13 +235,14 @@ function invalidPayload(message, expected) {
       input.length === (wantsSkill ? 2 : 1) &&
       (wantsSkill
         ? input[0]?.type === "skill" &&
-          input[0]?.name === "wechat-connection" &&
+          input[0]?.name === "message-connection" &&
           typeof input[0]?.path === "string" &&
           isAbsolute(input[0].path) &&
           input[0].path.endsWith(connectionSkillPathSuffix) &&
           input[1]?.type === "text" &&
-          input[1]?.text === "hello"
-        : input[0]?.type === "text" && input[0]?.text === "hello");
+          input[1]?.text === "当前消息渠道：wechat\nhello"
+        : input[0]?.type === "text" &&
+          input[0]?.text === "当前消息渠道：wechat\nhello");
     if (!valid) {
       errorResponse(message.id, -32005, "invalid bootstrap skill payload");
       return true;

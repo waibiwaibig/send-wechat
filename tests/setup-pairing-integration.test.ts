@@ -24,7 +24,7 @@ describe.skipIf(process.platform === "win32")(
   () => {
     it("keeps the same invitation usable after local save failure, then pairs with readable local files", async () => {
       const root = await mkdtemp(
-        join(tmpdir(), "send-wechat-persist-handshake-"),
+        join(tmpdir(), "send-message-persist-handshake-"),
       );
       roots.push(root);
       const credentials = new OwnerOnlyClientRelayCredentialStore(
