@@ -15,9 +15,9 @@ const IDLE_DELAY_MS = 1000;
 const MAX_BACKOFF_MS = 60_000;
 const MIN_PLAUSIBLE_MESSAGE_TIME = Date.parse("2020-01-01T00:00:00.000Z");
 const CONNECTION_CONFIRMATION_TEXT =
-  "send-wechat 已连接，可以开始使用。 / send-wechat is connected and ready.";
+  "send-message 已连接，可以开始使用。 / send-message is connected and ready.";
 const RECOVERY_CONFIRMATION_TEXT =
-  "send-wechat 会话已续期，可以继续使用。 / Session renewed; you can continue using send-wechat.";
+  "send-message 会话已续期，可以继续使用。 / Session renewed; you can continue using send-message.";
 
 export type PollingIlinkPort = {
   pollUpdates(params: {
@@ -42,6 +42,11 @@ export type PollingTextInboxPort = {
   append(messages: InboundText[]): void;
 };
 
+type InboundMessage = Extract<
+  PollUpdatesResult,
+  { status: "ok" }
+>["inbound"][number];
+
 export type PollingCoordinatorDependencies = {
   stateStore: StateStore;
   credentialStore: CredentialStore;
@@ -51,6 +56,9 @@ export type PollingCoordinatorDependencies = {
   sleep: (milliseconds: number) => Promise<void>;
   random: () => number;
   inbox?: PollingTextInboxPort;
+  receiveAttachments?: (
+    message: InboundMessage,
+  ) => Promise<InboundText["attachments"]>;
 };
 
 export type PollOnceResult = {
@@ -152,19 +160,52 @@ export class PollingCoordinator {
       .sort((left, right) => left.effectiveTime - right.effectiveTime)
       .at(-1);
 
-    const inboxMessages = validBoundMessages.flatMap((message) => {
-      if (
-        typeof message.id !== "string" ||
-        typeof message.text !== "string" ||
-        isRecoverCommand(message.text) ||
-        !isValidInboundText(message.id, message.text)
-      ) {
-        return [];
+    const attachmentsByMessage = new Map<
+      InboundMessage,
+      NonNullable<InboundText["attachments"]>
+    >();
+    const attachmentFailures = new Set<InboundMessage>();
+    for (const message of validBoundMessages) {
+      if (isRecoverCommand(message.text ?? "")) continue;
+      if (message.attachments === undefined) continue;
+      if (this.dependencies.receiveAttachments === undefined) {
+        attachmentFailures.add(message);
+        continue;
       }
+      try {
+        const attachments = await this.dependencies.receiveAttachments(message);
+        if (
+          attachments === undefined ||
+          attachments.length !== message.attachments.length
+        ) {
+          attachmentFailures.add(message);
+        } else {
+          attachmentsByMessage.set(message, attachments);
+        }
+      } catch {
+        attachmentFailures.add(message);
+      }
+    }
+    const inboxMessages = validBoundMessages.flatMap((message) => {
+      if (typeof message.id !== "string") return [];
+      if (isRecoverCommand(message.text ?? "")) return [];
+      const attachments = attachmentsByMessage.get(message);
+      const failureText = attachmentFailures.has(message)
+        ? "[附件下载失败，请稍后重试。 / Attachment download failed; please retry.]"
+        : null;
+      const text =
+        typeof message.text === "string" &&
+        isValidInboundText(message.id, message.text)
+          ? failureText === null
+            ? message.text
+            : `${message.text} ${failureText}`
+          : failureText;
+      if (text === null && attachments === undefined) return [];
       return [
         {
           id: message.id,
-          text: message.text,
+          ...(text === null ? {} : { text }),
+          ...(attachments === undefined ? {} : { attachments }),
           receivedAt: this.effectiveInboundTime(message.createTimeMs),
         },
       ];
@@ -291,7 +332,7 @@ export class PollingCoordinator {
       type: "send-text",
       requestId: `reminder:${lastInboundAt}`,
       idempotencyKey: `reminder:${lastInboundAt}`,
-      text: "send-wechat 会话将在 1 小时内过期。请发送 /recover 续期。 / The session expires within 1 hour; send /recover to renew.",
+      text: "send-message 会话将在 1 小时内过期。请发送 /recover 续期。 / The session expires within 1 hour; send /recover to renew.",
       purpose: "reminder",
     });
   }

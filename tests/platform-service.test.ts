@@ -47,7 +47,7 @@ function result(
 }
 
 async function fixtureRoot(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "send-wechat-platform-"));
+  const root = await mkdtemp(path.join(tmpdir(), "send-message-platform-"));
   temporaryDirectories.push(root);
   return root;
 }
@@ -68,8 +68,8 @@ function dependencies(
       stateDir,
       logDir: path.join(stateDir, "logs"),
       runDir: path.join(stateDir, "run"),
-      socketPath: path.join(stateDir, "run", "send-wechat.sock"),
-      ipcEndpoint: path.join(stateDir, "run", "send-wechat.sock"),
+      socketPath: path.join(stateDir, "run", "send-message.sock"),
+      ipcEndpoint: path.join(stateDir, "run", "send-message.sock"),
       stateFile: path.join(stateDir, "state.json"),
       installationFile: path.join(stateDir, "installation.json"),
       idempotencyFile: path.join(stateDir, "idempotency.sqlite3"),
@@ -84,8 +84,8 @@ function dependencies(
         : "/opt/node/bin/node",
     cliEntry:
       platform === "win32"
-        ? "C:\\Program Files\\send-wechat\\cli.js"
-        : "/opt/send-wechat/cli.js",
+        ? "C:\\Program Files\\send-message\\cli.js"
+        : "/opt/send-message/cli.js",
     uid: "501",
     username: "alice",
     commandRunner: runnerFor(calls),
@@ -93,10 +93,36 @@ function dependencies(
   };
 }
 
+describe("service daemon arguments", () => {
+  it.each(["darwin", "linux", "win32"] as const)(
+    "passes each daemon argument to the %s service definition",
+    async (platform) => {
+      const root = await fixtureRoot();
+      const config = path.join(root, `gateway-${platform}.service`);
+      const calls: Array<{
+        file: string;
+        args: readonly string[];
+        shell?: boolean;
+      }> = [];
+      const manager = createServiceManager(
+        dependencies(platform, config, calls, {
+          daemonArgs: ["--channel", "feishu", "internal-daemon"],
+        }),
+      );
+
+      await manager.install();
+      const definition = await readFile(config, "utf8");
+      expect(definition).toContain("--channel");
+      expect(definition).toContain("feishu");
+      expect(definition).toContain("internal-daemon");
+    },
+  );
+});
+
 describe("macOS service manager", () => {
   it("writes the exact LaunchAgent definition and keeps install separate from start", async () => {
     const root = await fixtureRoot();
-    const config = path.join(root, "io.github.waibiwaibig.send-wechat.plist");
+    const config = path.join(root, "io.github.waibiwaibig.send-message.plist");
     const calls: Array<{
       file: string;
       args: readonly string[];
@@ -107,9 +133,9 @@ describe("macOS service manager", () => {
     await manager.install();
     const definition = await readFile(config, "utf8");
     expect(definition).toContain("<key>Label</key>");
-    expect(definition).toContain("io.github.waibiwaibig.send-wechat");
+    expect(definition).toContain("io.github.waibiwaibig.send-message");
     expect(definition).toContain("<string>/opt/node/bin/node</string>");
-    expect(definition).toContain("<string>/opt/send-wechat/cli.js</string>");
+    expect(definition).toContain("<string>/opt/send-message/cli.js</string>");
     expect(definition).toContain("<string>internal-daemon</string>");
     expect(definition).toContain("<key>RunAtLoad</key>\n\t<true/>");
     expect(definition).toContain("<key>KeepAlive</key>\n\t<true/>");
@@ -124,32 +150,32 @@ describe("macOS service manager", () => {
     expect(calls).toEqual([
       {
         file: "launchctl",
-        args: ["print", "gui/501/io.github.waibiwaibig.send-wechat"],
+        args: ["print", "gui/501/io.github.waibiwaibig.send-message"],
         shell: false,
       },
       {
         file: "launchctl",
-        args: ["kickstart", "gui/501/io.github.waibiwaibig.send-wechat"],
+        args: ["kickstart", "gui/501/io.github.waibiwaibig.send-message"],
         shell: false,
       },
       {
         file: "launchctl",
-        args: ["print", "gui/501/io.github.waibiwaibig.send-wechat"],
+        args: ["print", "gui/501/io.github.waibiwaibig.send-message"],
         shell: false,
       },
       {
         file: "launchctl",
-        args: ["bootout", "gui/501/io.github.waibiwaibig.send-wechat"],
+        args: ["bootout", "gui/501/io.github.waibiwaibig.send-message"],
         shell: false,
       },
       {
         file: "launchctl",
-        args: ["print", "gui/501/io.github.waibiwaibig.send-wechat"],
+        args: ["print", "gui/501/io.github.waibiwaibig.send-message"],
         shell: false,
       },
       {
         file: "launchctl",
-        args: ["kickstart", "-k", "gui/501/io.github.waibiwaibig.send-wechat"],
+        args: ["kickstart", "-k", "gui/501/io.github.waibiwaibig.send-message"],
         shell: false,
       },
     ]);
@@ -157,7 +183,7 @@ describe("macOS service manager", () => {
 
   it("reports absence and bootstraps an installed but unloaded agent", async () => {
     const root = await fixtureRoot();
-    const config = path.join(root, "send-wechat.plist");
+    const config = path.join(root, "send-message.plist");
     const calls: Array<{
       file: string;
       args: readonly string[];
@@ -211,7 +237,7 @@ describe("macOS service manager", () => {
 
   it("surfaces launchctl failures as platform command errors", async () => {
     const root = await fixtureRoot();
-    const config = path.join(root, "send-wechat.plist");
+    const config = path.join(root, "send-message.plist");
     const manager = createServiceManager(
       dependencies("darwin", config, [], {
         commandRunner: {
@@ -240,9 +266,9 @@ describe("macOS service manager", () => {
       dependencies("darwin", config, calls, {
         identity: {
           label: "io.example.gateway<&",
-          linuxServiceName: "send-wechat-gateway.service",
-          windowsTaskPrefix: "send-wechat-gateway",
-          description: "send-wechat Codex gateway",
+          linuxServiceName: "send-message-gateway.service",
+          windowsTaskPrefix: "send-message-gateway",
+          description: "send-message Codex gateway",
         },
       }),
     );
@@ -253,7 +279,7 @@ describe("macOS service manager", () => {
       "<string>io.example.gateway&lt;&amp;</string>",
     );
     expect(definition).not.toContain(
-      "<string>io.github.waibiwaibig.send-wechat</string>",
+      "<string>io.github.waibiwaibig.send-message</string>",
     );
 
     await manager.status();
@@ -269,7 +295,7 @@ describe("macOS service manager", () => {
     expect(
       targets.every((target) => target === "gui/501/io.example.gateway<&"),
     ).toBe(true);
-    expect(targets.some((target) => target.includes("send-wechat"))).toBe(
+    expect(targets.some((target) => target.includes("send-message"))).toBe(
       false,
     );
   });
@@ -278,7 +304,7 @@ describe("macOS service manager", () => {
 describe("Linux service manager", () => {
   it("writes an escaped user unit, reloads, and enables without starting", async () => {
     const root = await fixtureRoot();
-    const config = path.join(root, "send-wechat.service");
+    const config = path.join(root, "send-message.service");
     const calls: Array<{
       file: string;
       args: readonly string[];
@@ -287,21 +313,21 @@ describe("Linux service manager", () => {
     const manager = createServiceManager(
       dependencies("linux", config, calls, {
         nodeExecutable: "/opt/node with space/bin/node",
-        cliEntry: '/opt/send-wechat/cli"entry.js',
+        cliEntry: '/opt/send-message/cli"entry.js',
       }),
     );
 
     await manager.install();
     const definition = await readFile(config, "utf8");
     expect(definition).toContain(
-      'ExecStart="/opt/node with space/bin/node" "/opt/send-wechat/cli\\\"entry.js" internal-daemon',
+      'ExecStart="/opt/node with space/bin/node" "/opt/send-message/cli\\\"entry.js" "internal-daemon"',
     );
     expect(definition).toContain("Restart=on-failure");
     expect(calls).toEqual([
       { file: "systemctl", args: ["--user", "daemon-reload"], shell: false },
       {
         file: "systemctl",
-        args: ["--user", "enable", "send-wechat.service"],
+        args: ["--user", "enable", "send-message.service"],
         shell: false,
       },
     ]);
@@ -310,7 +336,7 @@ describe("Linux service manager", () => {
   it("reports an unavailable systemd user manager explicitly", async () => {
     const root = await fixtureRoot();
     const manager = createServiceManager(
-      dependencies("linux", path.join(root, "send-wechat.service"), [], {
+      dependencies("linux", path.join(root, "send-message.service"), [], {
         commandRunner: {
           run: async () => {
             const error = new Error("systemctl not found") as Error & {
@@ -334,7 +360,7 @@ describe("Linux service manager", () => {
       shell?: boolean;
     }> = [];
     const manager = createServiceManager(
-      dependencies("linux", path.join(root, "send-wechat.service"), calls, {
+      dependencies("linux", path.join(root, "send-message.service"), calls, {
         commandRunner: {
           run: async (file, args, options) => {
             calls.push({
@@ -357,7 +383,7 @@ describe("Linux service manager", () => {
 
   it("controls an installed systemd user service through its full lifecycle", async () => {
     const root = await fixtureRoot();
-    const config = path.join(root, "send-wechat.service");
+    const config = path.join(root, "send-message.service");
     const calls: Array<{
       file: string;
       args: readonly string[];
@@ -389,10 +415,10 @@ describe("Linux service manager", () => {
     await manager.uninstall();
 
     const invocations = calls.map((call) => call.args.join(" "));
-    expect(invocations).toContain("--user start send-wechat.service");
-    expect(invocations).toContain("--user restart send-wechat.service");
-    expect(invocations).toContain("--user stop send-wechat.service");
-    expect(invocations).toContain("--user disable --now send-wechat.service");
+    expect(invocations).toContain("--user start send-message.service");
+    expect(invocations).toContain("--user restart send-message.service");
+    expect(invocations).toContain("--user stop send-message.service");
+    expect(invocations).toContain("--user disable --now send-message.service");
     await expect(readFile(config, "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -400,7 +426,7 @@ describe("Linux service manager", () => {
 
   it("does not stop an inactive unit and reports command failures", async () => {
     const root = await fixtureRoot();
-    const config = path.join(root, "send-wechat.service");
+    const config = path.join(root, "send-message.service");
     const calls: Array<{
       file: string;
       args: readonly string[];
@@ -433,7 +459,7 @@ describe("Linux service manager", () => {
   it("maps a disconnected user bus result to unsupported platform", async () => {
     const root = await fixtureRoot();
     const manager = createServiceManager(
-      dependencies("linux", path.join(root, "send-wechat.service"), [], {
+      dependencies("linux", path.join(root, "send-message.service"), [], {
         commandRunner: {
           run: async () => result(1, "Failed to connect to bus"),
         },
@@ -454,9 +480,9 @@ describe("Linux service manager", () => {
       dependencies("linux", config, calls, {
         identity: {
           label: "io.example.gateway",
-          linuxServiceName: "send-wechat-gateway.service",
-          windowsTaskPrefix: "send-wechat-gateway",
-          description: 'send-wechat "Codex" & gateway %',
+          linuxServiceName: "send-message-gateway.service",
+          windowsTaskPrefix: "send-message-gateway",
+          description: 'send-message "Codex" & gateway %',
         },
       }),
     );
@@ -464,9 +490,9 @@ describe("Linux service manager", () => {
     await manager.install();
     const definition = await readFile(config, "utf8");
     expect(definition).toContain(
-      'Description="send-wechat \\\"Codex\\\" & gateway %%"',
+      'Description="send-message \\\"Codex\\\" & gateway %%"',
     );
-    expect(definition).not.toContain("Description=send-wechat daemon");
+    expect(definition).not.toContain("Description=send-message daemon");
 
     await manager.status();
     await manager.start();
@@ -479,10 +505,10 @@ describe("Linux service manager", () => {
     expect(serviceArguments.length).toBeGreaterThan(0);
     expect(
       serviceArguments.every(
-        (argument) => argument === "send-wechat-gateway.service",
+        (argument) => argument === "send-message-gateway.service",
       ),
     ).toBe(true);
-    expect(serviceArguments).not.toContain("send-wechat.service");
+    expect(serviceArguments).not.toContain("send-message.service");
   });
 });
 
@@ -648,9 +674,9 @@ describe("Windows service manager", () => {
       dependencies("win32", config, calls, {
         identity: {
           label: "io.example.gateway<&",
-          linuxServiceName: "send-wechat-gateway.service",
+          linuxServiceName: "send-message-gateway.service",
           windowsTaskPrefix: "gateway'$(Invoke-Thing)",
-          description: 'send-wechat "Codex" & gateway %',
+          description: 'send-message "Codex" & gateway %',
         },
       }),
     );
@@ -660,7 +686,7 @@ describe("Windows service manager", () => {
     expect(definition).toContain(
       "Register-ScheduledTask -TaskName 'gateway''$(Invoke-Thing)-",
     );
-    expect(definition).not.toMatch(/-TaskName 'send-wechat-[0-9a-f]{16}'/);
+    expect(definition).not.toMatch(/-TaskName 'send-message-[0-9a-f]{16}'/);
 
     await manager.status();
     await manager.start();
@@ -676,7 +702,7 @@ describe("Windows service manager", () => {
         command.includes("gateway''$(Invoke-Thing)-"),
       ),
     ).toBe(true);
-    expect(commands.some((command) => command.includes("send-wechat-"))).toBe(
+    expect(commands.some((command) => command.includes("send-message-"))).toBe(
       false,
     );
   });

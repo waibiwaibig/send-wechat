@@ -13,7 +13,7 @@ source behavior，来源固定为：
 - repository：<https://github.com/Tencent/openclaw-weixin>
 - 用途：为本项目的独立 iLink 模块提供所需协议行为的来源和 attribution
 
-`send-wechat` 不在运行时导入 OpenClaw，不 deep-import Tencent package，不使用 community fork，也不动态下载协议代码。上游协议来源不是本项目的运行时 npm 依赖。
+`send-message` 不在运行时导入 OpenClaw，不 deep-import Tencent package，不使用 community fork，也不动态下载协议代码。上游协议来源不是本项目的运行时 npm 依赖。
 
 Tencent 上游许可证 notice：
 
@@ -43,6 +43,7 @@ Tencent 上游许可证 notice：
 
 | Package                     | Locked version | License           |
 | --------------------------- | -------------: | ----------------- |
+| `@larksuiteoapi/node-sdk`   |       `1.74.0` | MIT               |
 | `@napi-rs/keyring`          |        `1.3.0` | MIT               |
 | `@vscode/os-proxy-resolver` |        `0.4.0` | MIT               |
 | `commander`                 |       `15.0.0` | MIT               |

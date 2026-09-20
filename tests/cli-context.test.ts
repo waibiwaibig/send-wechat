@@ -33,18 +33,19 @@ const fixturePaths: PlatformPaths = {
   platform: "darwin",
   arch: "arm64",
   username: "test",
-  stateDir: "/tmp/send-wechat-context-state",
-  logDir: "/tmp/send-wechat-context-log",
-  runDir: "/tmp/send-wechat-context-run",
-  socketPath: "/tmp/send-wechat-context-run/send-wechat.sock",
-  ipcEndpoint: "/tmp/send-wechat-context-run/send-wechat.sock",
-  stateFile: "/tmp/send-wechat-context-state/state.json",
-  installationFile: "/tmp/send-wechat-context-state/installation.json",
-  idempotencyFile: "/tmp/send-wechat-context-state/idempotency.sqlite3",
-  capabilityFile: "/tmp/send-wechat-context-state/capability",
-  clientCredentialFile: "/tmp/send-wechat-context-state/client-credential.json",
-  tempDir: "/tmp/send-wechat-context-state/tmp",
-  serviceConfigPath: "/tmp/send-wechat-context.plist",
+  stateDir: "/tmp/send-message-context-state",
+  logDir: "/tmp/send-message-context-log",
+  runDir: "/tmp/send-message-context-run",
+  socketPath: "/tmp/send-message-context-run/send-message.sock",
+  ipcEndpoint: "/tmp/send-message-context-run/send-message.sock",
+  stateFile: "/tmp/send-message-context-state/state.json",
+  installationFile: "/tmp/send-message-context-state/installation.json",
+  idempotencyFile: "/tmp/send-message-context-state/idempotency.sqlite3",
+  capabilityFile: "/tmp/send-message-context-state/capability",
+  clientCredentialFile:
+    "/tmp/send-message-context-state/client-credential.json",
+  tempDir: "/tmp/send-message-context-state/tmp",
+  serviceConfigPath: "/tmp/send-message-context.plist",
 };
 
 function io(input: Readable = Readable.from([])): {
@@ -406,7 +407,7 @@ describe("CLI context adapters", () => {
 async function isolatedPaths(
   platform: PlatformPaths["platform"] = "darwin",
 ): Promise<PlatformPaths> {
-  const root = await mkdtemp(join(tmpdir(), "send-wechat-context-pair-"));
+  const root = await mkdtemp(join(tmpdir(), "send-message-context-pair-"));
   temporaryRoots.push(root);
   return {
     ...fixturePaths,
@@ -414,8 +415,8 @@ async function isolatedPaths(
     stateDir: join(root, "state"),
     logDir: join(root, "logs"),
     runDir: join(root, "run"),
-    socketPath: join(root, "run", "send-wechat.sock"),
-    ipcEndpoint: join(root, "run", "send-wechat.sock"),
+    socketPath: join(root, "run", "send-message.sock"),
+    ipcEndpoint: join(root, "run", "send-message.sock"),
     stateFile: join(root, "state", "state.json"),
     installationFile: join(root, "state", "installation.json"),
     idempotencyFile: join(root, "state", "idempotency.sqlite3"),

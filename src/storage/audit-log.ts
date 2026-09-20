@@ -35,7 +35,7 @@ export class JsonAuditLog implements AuditPort {
     await this.prune();
 
     const date = new Date(this.now()).toISOString().slice(0, 10);
-    const filePath = join(this.options.directory, `send-wechat-${date}.jsonl`);
+    const filePath = join(this.options.directory, `send-message-${date}.jsonl`);
     const line = `${JSON.stringify({
       timestamp: event.timestamp,
       request_id: event.requestId,
@@ -91,15 +91,15 @@ export class JsonAuditLog implements AuditPort {
       throw error;
     }
     const matching = names.filter((name) =>
-      /^send-wechat-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name),
+      /^send-message-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name),
     );
     return Promise.all(
       matching.map(async (name) => {
         const path = join(this.options.directory, name);
         const metadata = await stat(path);
         const datePart = name.slice(
-          "send-wechat-".length,
-          "send-wechat-YYYY-MM-DD".length,
+          "send-message-".length,
+          "send-message-YYYY-MM-DD".length,
         );
         return {
           path,

@@ -469,7 +469,7 @@ async function probeRelayHealth(
         JSON.stringify(body) ===
           JSON.stringify({
             ok: true,
-            service: "send-wechat-personal-relay",
+            service: "send-message-personal-relay",
             version: 1,
           })
       )

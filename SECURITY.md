@@ -1,19 +1,17 @@
 # Security Policy
 
-`send-wechat` 是预发布的非官方 CLI。本文描述产品边界，不构成对 Tencent、Cloudflare
-或尚未完成人工验收的平台安装提供安全保证。
+`send-message` 是预发布的非官方 CLI。本文描述产品边界，不构成对 Tencent、Cloudflare
+、Feishu 或尚未完成人工验收的平台安装提供安全保证。
 
 ## 信任边界
 
 工具信任已授权设备上的当前操作系统用户：该用户运行的任意进程都可调用 CLI，发送时
-不再逐次确认。以下均不可信：其他本机用户、远程主机、用户文件路径、入站 Weixin
-正文、Relay 帧和所有网络响应。管理员/root、当前系统账户、Tencent 或 Cloudflare
+不再逐次确认。以下均不可信：其他本机用户、远程主机、用户文件路径、入站微信/飞书正文与附件、Relay 帧和所有网络响应。管理员/root、当前系统账户、Tencent、Feishu 或 Cloudflare
 控制面被攻破不在本项目安全声明内。
 
-每个 binding 恰有一台 Hub。只有 Hub 访问 Weixin 和保存 bot/context token。远端设备
-只保存自己的 device ID/key；它永远不取得 Weixin 凭据或其他设备密钥。
+每个安装由一台 Hub 保存所选渠道的凭据：微信 bot/context token、飞书应用配置分别存储。远端设备只保存自己的 device ID/key，不取得渠道凭据或其他设备密钥。单机安装无需 Relay。
 
-## 个人 Relay
+## 个人 Relay（用户显式启用）
 
 - Relay 是部署在用户自己 Cloudflare account 下的 Worker + SQLite Durable Object；
   项目方不运行共享服务、目录或 fallback。
@@ -40,7 +38,7 @@ Weixin 凭据路径的信任边界。远端设备与 Hub 间的应用层密文�
 
 ## 本机凭据与 IPC
 
-- Hub 的 Weixin binding 和个人 Relay 使用系统原生凭据库中的固定独立条目。
+- Hub 的微信、飞书应用和个人 Relay 使用系统原生凭据库中的固定独立条目。
   Windows 远端客户端使用原生凭据库。
 - macOS 与 GNU/Linux 远端客户端只在 owner-only 文件中保存自己的 device ID/key；父目录必须是
   `0700`，文件必须是 `0600`。读取时拒绝符号链接、非当前 owner、过宽权限、超限内容、
@@ -57,8 +55,8 @@ Agent 可以执行用户已明确请求的安装、诊断和安全配置。Cloud
 Weixin QR/验证码/首条激活消息、系统安全存储解锁、多设备决定、更新授权和 reset 确认
 仍由用户完成。Agent 不得索取密码；密码只进入操作系统提供的隐藏输入界面。
 
-binding 与本机角色不可变。Hub `reset` 先确认删除记录的 Cloudflare Worker；失败则保留
-本地 Relay 管理状态。成功后才停止服务并删除两类钥匙串凭据、状态、日志和临时文件。
+微信绑定固定；飞书目标通过显式配置修改。单机角色可显式启用 Relay。Hub `reset` 先确认删除记录的 Cloudflare Worker；失败则保留
+本地 Relay 管理状态。成功后才停止服务并删除渠道及 Relay 凭据、状态、日志和临时文件。
 远端 `reset` 只删除该设备的本机数据。`reset --local` 用于客户端恢复并清理残留服务，
 拒绝已识别的 Hub，不删除云端部署。macOS/Linux 不访问原生钥匙串，Windows 会清除
 自己的原生客户端凭据。它不撤销 Hub 上的旧设备授权。
@@ -69,8 +67,8 @@ binding 与本机角色不可变。Hub `reset` 先确认删除记录的 Cloudfla
 
 ## 发送语义
 
-只有绑定用户的新入站消息会建立或续期 24 小时 session window，正文被忽略。
-`accepted` 只表示 Weixin endpoint 接受，不表示 delivered/read。没有权威结果时返回
+微信绑定用户的新入站消息建立或续期 24 小时 session window。飞书按应用权限和 API 限制处理。秘书只在有效消费租约期间收集已绑定用户的正文与附件；飞书群同时检查 chat_id 和 owner open_id。
+`accepted` 只表示对应渠道 endpoint 接受，不表示 delivered/read。没有权威结果时返回
 `RESULT_UNKNOWN`，不得自动重放。幂等账本只在 Hub 本地抑制重复，不是服务端保证。
 
 ## 报告漏洞

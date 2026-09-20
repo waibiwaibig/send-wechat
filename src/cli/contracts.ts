@@ -78,6 +78,8 @@ export type SendOptions = {
   text?: string;
   stdin?: boolean;
   file?: string;
+  image?: string;
+  channel?: "wechat" | "feishu" | "both";
   idempotencyKey?: string;
 };
 export type SetupOptions = {
@@ -85,6 +87,10 @@ export type SetupOptions = {
   pairStdin?: boolean;
   pairStdout?: boolean;
   qrFile?: string;
+  channels?: "wechat" | "feishu" | "both";
+  defaultChannel?: "wechat" | "feishu";
+  feishuConfigStdin?: boolean;
+  relay?: boolean;
 };
 export type RecordValue = Record<string, unknown>;
 
@@ -135,6 +141,7 @@ export function classifyExitCode(code: string): number {
   )
     return 2;
   if (
+    code === "CHANNEL_SEND_FAILED" ||
     code === "SERVER_REJECTED" ||
     code === "PRE_SEND_FAILED" ||
     code === "RESULT_UNKNOWN" ||
@@ -144,6 +151,9 @@ export function classifyExitCode(code: string): number {
   )
     return 4;
   if (
+    code.startsWith("FEISHU_") ||
+    code.startsWith("CHANNEL_") ||
+    code === "DEFAULT_CHANNEL_REQUIRED" ||
     code === "IPC_UNAVAILABLE" ||
     code === "IPC_ENDPOINT_UNSAFE" ||
     code === "IPC_ALREADY_RUNNING" ||
@@ -248,6 +258,23 @@ export function localizedMessage(
   language: "zh-CN" | "en",
 ): string {
   const messages: Record<string, { "zh-CN": string; en: string }> = {
+    CHANNEL_SELECTION_REQUIRED: {
+      "zh-CN": "请选择渠道：setup --channels wechat|feishu|both。",
+      en: "Choose setup --channels wechat|feishu|both.",
+    },
+    DEFAULT_CHANNEL_REQUIRED: {
+      "zh-CN": "双渠道安装需要 --default-channel wechat|feishu。",
+      en: "Select --default-channel wechat|feishu.",
+    },
+    FEISHU_CONFIGURATION_REQUIRED: {
+      "zh-CN": "需要飞书应用配置；使用 --feishu-config-stdin 从标准输入读取。",
+      en: "Supply Feishu application configuration using --feishu-config-stdin.",
+    },
+    FEISHU_CONFIGURATION_INVALID: {
+      "zh-CN": "飞书应用配置无效。",
+      en: "Invalid Feishu application configuration.",
+    },
+
     NODE_VERSION_UNSUPPORTED: {
       "zh-CN": "需要 Node.js 24 或更高版本。",
       en: "Node.js 24 or newer is required.",
@@ -358,68 +385,68 @@ export function localizedMessage(
     },
     INSTALLATION_INCONSISTENT: {
       "zh-CN":
-        "本机安装角色与凭据不一致，已停止操作；客户端请运行 send-wechat reset --local 后重新配对。",
-      en: "The local installation and credential disagree; operation stopped. On a client, run send-wechat reset --local and pair again.",
+        "本机安装角色与凭据不一致，已停止操作；客户端请运行 send-message reset --local 后重新配对。",
+      en: "The local installation and credential disagree; operation stopped. On a client, run send-message reset --local and pair again.",
     },
     INSTALLATION_ALREADY_CONFIGURED: {
       "zh-CN":
-        "本机已经配置；如需切换角色，请先运行 send-wechat reset --local（客户端）或 reset（Hub）。",
-      en: "This machine is already configured; run send-wechat reset --local on a client or reset on a Hub before changing roles.",
+        "本机已经配置；如需切换角色，请先运行 send-message reset --local（客户端）或 reset（Hub）。",
+      en: "This machine is already configured; run send-message reset --local on a client or reset on a Hub before changing roles.",
     },
     RESET_LOCAL_HUB_STATE: {
       "zh-CN":
-        "拒绝 reset --local：检测到 Hub 绑定状态；请使用完整的 send-wechat reset。",
-      en: "Refusing reset --local because Hub binding state was detected; use the full send-wechat reset.",
+        "拒绝 reset --local：检测到 Hub 绑定状态；请使用完整的 send-message reset。",
+      en: "Refusing reset --local because Hub binding state was detected; use the full send-message reset.",
     },
     RESET_LOCAL_CLEANUP_FAILED: {
       "zh-CN":
-        "客户端本地清理失败；请检查文件权限后重试 send-wechat reset --local。",
-      en: "Client-local cleanup failed; check file permissions and retry send-wechat reset --local.",
+        "客户端本地清理失败；请检查文件权限后重试 send-message reset --local。",
+      en: "Client-local cleanup failed; check file permissions and retry send-message reset --local.",
     },
     SETUP_CLIENT_STORAGE_FAILED: {
       "zh-CN":
-        "客户端凭据保存失败；请运行 send-wechat reset --local 后重新执行 setup --pair。",
-      en: "The client credential could not be saved; run send-wechat reset --local and then setup --pair again.",
+        "客户端凭据保存失败；请运行 send-message reset --local 后重新执行 setup --pair。",
+      en: "The client credential could not be saved; run send-message reset --local and then setup --pair again.",
     },
     SETUP_CLIENT_CLEANUP_FAILED: {
       "zh-CN":
-        "客户端配对清理失败，状态可能不完整；请运行 send-wechat reset --local 后重新配对。",
-      en: "Client pairing cleanup failed and state may be partial; run send-wechat reset --local and pair again.",
+        "客户端配对清理失败，状态可能不完整；请运行 send-message reset --local 后重新配对。",
+      en: "Client pairing cleanup failed and state may be partial; run send-message reset --local and pair again.",
     },
     SETUP_CLIENT_READBACK_MISMATCH: {
       "zh-CN":
-        "客户端凭据回读校验失败；请运行 send-wechat reset --local 后重新配对。",
-      en: "The client credential read-back check failed; run send-wechat reset --local and pair again.",
+        "客户端凭据回读校验失败；请运行 send-message reset --local 后重新配对。",
+      en: "The client credential read-back check failed; run send-message reset --local and pair again.",
     },
     SETUP_CLIENT_PAIR_MISMATCH: {
       "zh-CN":
-        "客户端配对结果不一致；请运行 send-wechat reset --local 后重新配对。",
-      en: "The client pairing result was inconsistent; run send-wechat reset --local and pair again.",
+        "客户端配对结果不一致；请运行 send-message reset --local 后重新配对。",
+      en: "The client pairing result was inconsistent; run send-message reset --local and pair again.",
     },
     SETUP_CLIENT_PERSISTENCE_MISSING: {
       "zh-CN":
-        "客户端配对未确认本地保存；请运行 send-wechat reset --local 后重新配对。",
-      en: "Client pairing did not confirm local persistence; run send-wechat reset --local and pair again.",
+        "客户端配对未确认本地保存；请运行 send-message reset --local 后重新配对。",
+      en: "Client pairing did not confirm local persistence; run send-message reset --local and pair again.",
     },
     RELAY_CREDENTIAL_STORE_UNAVAILABLE: {
       "zh-CN":
-        "个人 Relay 凭据存储不可用；客户端请运行 send-wechat reset --local 后重新配对。",
-      en: "The personal relay credential store is unavailable; on a client, run send-wechat reset --local and pair again.",
+        "个人 Relay 凭据存储不可用；客户端请运行 send-message reset --local 后重新配对。",
+      en: "The personal relay credential store is unavailable; on a client, run send-message reset --local and pair again.",
     },
     RELAY_CREDENTIAL_SCHEMA_INCOMPATIBLE: {
       "zh-CN":
-        "个人 Relay 凭据格式无法读取；客户端请运行 send-wechat reset --local 后重新配对。",
-      en: "The personal relay credential format cannot be read; on a client, run send-wechat reset --local and pair again.",
+        "个人 Relay 凭据格式无法读取；客户端请运行 send-message reset --local 后重新配对。",
+      en: "The personal relay credential format cannot be read; on a client, run send-message reset --local and pair again.",
     },
     RELAY_CREDENTIAL_PERMISSIONS_UNSAFE: {
       "zh-CN":
-        "个人 Relay 凭据文件权限不安全；请运行 send-wechat reset --local 后重新配对。",
-      en: "The personal relay credential file has unsafe permissions; run send-wechat reset --local and pair again.",
+        "个人 Relay 凭据文件权限不安全；请运行 send-message reset --local 后重新配对。",
+      en: "The personal relay credential file has unsafe permissions; run send-message reset --local and pair again.",
     },
     RELAY_CREDENTIAL_FILE_UNSAFE: {
       "zh-CN":
-        "个人 Relay 凭据文件不安全；请运行 send-wechat reset --local 后重新配对。",
-      en: "The personal relay credential file is unsafe; run send-wechat reset --local and pair again.",
+        "个人 Relay 凭据文件不安全；请运行 send-message reset --local 后重新配对。",
+      en: "The personal relay credential file is unsafe; run send-message reset --local and pair again.",
     },
     RELAY_CREDENTIAL_SCHEMA_INVALID: {
       "zh-CN": "要保存的个人 Relay 凭据格式无效；请重新配对。",
@@ -427,8 +454,8 @@ export function localizedMessage(
     },
     RELAY_CREDENTIAL_MISSING: {
       "zh-CN":
-        "找不到客户端个人 Relay 凭据；请运行 send-wechat reset --local 后重新配对。",
-      en: "The client personal relay credential is missing; run send-wechat reset --local and pair again.",
+        "找不到客户端个人 Relay 凭据；请运行 send-message reset --local 后重新配对。",
+      en: "The client personal relay credential is missing; run send-message reset --local and pair again.",
     },
     RELAY_CHECK_BLOCKED: {
       "zh-CN":

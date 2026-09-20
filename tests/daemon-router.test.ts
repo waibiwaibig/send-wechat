@@ -28,6 +28,8 @@ describe("daemon request router", () => {
         contentSha256:
           "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
         stagedPath: "/owner/tmp/staged",
+        channel: "both",
+        mediaKind: "image",
       },
       { emit: vi.fn(), requestVerifyCode: vi.fn() },
     );
@@ -42,7 +44,65 @@ describe("daemon request router", () => {
       contentSha256:
         "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
       stagedPath: "/owner/tmp/staged",
+      channel: "both",
+      mediaKind: "image",
     });
+  });
+
+  it("routes text and inbox operations to their selected channels", async () => {
+    const execute = vi.fn(async () => ({ ok: true, command: "send" }));
+    const wechatInbox = {
+      poll: vi.fn(() => ({ messages: [], overflow: false })),
+      ack: vi.fn(),
+      release: vi.fn(),
+    };
+    const feishuInbox = {
+      poll: vi.fn(() => ({
+        messages: [{ id: "feishu-1", text: "hello", receivedAt: 1 }],
+        overflow: false,
+      })),
+      ack: vi.fn(),
+      release: vi.fn(),
+    };
+    const router = new DaemonRequestRouter({
+      runtime: { execute },
+      login: { login: vi.fn() },
+      withPollingPaused: async (operation) => operation(),
+      doctor: async () => ({ credentialStore: "available" }),
+      issuePairingInvitation: () => "sw1.invitation",
+      inboxes: { wechat: wechatInbox, feishu: feishuInbox },
+    });
+    const context = { emit: vi.fn(), requestVerifyCode: vi.fn() };
+
+    await router.handle(
+      {
+        command: "send_text",
+        requestId: "text-1",
+        idempotencyKey: "text-job",
+        text: "hello",
+        channel: "feishu",
+      },
+      context,
+    );
+    await router.handle(
+      {
+        command: "inbox_poll",
+        requestId: "inbox-1",
+        consumerId: "gateway",
+        channel: "feishu",
+      },
+      context,
+    );
+
+    expect(execute).toHaveBeenCalledWith({
+      type: "send-text",
+      requestId: "text-1",
+      idempotencyKey: "text-job",
+      text: "hello",
+      channel: "feishu",
+    });
+    expect(feishuInbox.poll).toHaveBeenCalledWith("gateway");
+    expect(wechatInbox.poll).not.toHaveBeenCalled();
   });
 
   it("streams login QR and Tencent pairing states through IPC", async () => {

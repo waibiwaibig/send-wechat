@@ -8,7 +8,7 @@ import type { IdempotencyStore } from "../runtime/ports.js";
 import type { IdempotencyEntry } from "../runtime/state.js";
 
 const SCHEMA_VERSION = 1;
-const SCHEMA_HASH = "send-wechat-idempotency-v1";
+const SCHEMA_HASH = "send-message-idempotency-v1";
 
 const entrySchema = z
   .object({

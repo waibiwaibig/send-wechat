@@ -10,7 +10,7 @@ describe("personal relay Worker", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({
       ok: true,
-      service: "send-wechat-personal-relay",
+      service: "send-message-personal-relay",
       version: 1,
     });
   });
@@ -20,7 +20,7 @@ describe("personal relay Worker", () => {
       method: "POST",
       headers: {
         "content-type": "application/octet-stream",
-        "x-send-wechat-request-id": "request-1",
+        "x-send-message-request-id": "request-1",
       },
       body: new Uint8Array([1, 2, 3]),
     });
@@ -28,7 +28,7 @@ describe("personal relay Worker", () => {
       method: "POST",
       headers: {
         "content-type": "application/octet-stream",
-        "x-send-wechat-request-id": "request-1",
+        "x-send-message-request-id": "request-1",
       },
       body: new Uint8Array([1, 2, 3]),
     });
@@ -71,7 +71,7 @@ describe("personal relay Worker", () => {
       method: "POST",
       headers: {
         "content-type": "application/octet-stream",
-        "x-send-wechat-request-id": "request-2",
+        "x-send-message-request-id": "request-2",
       },
       body: new Uint8Array([1, 2, 3]),
     });
@@ -120,7 +120,7 @@ describe("personal relay Worker", () => {
       method: "POST",
       headers: {
         "content-type": "application/octet-stream",
-        "x-send-wechat-request-id": "request-error",
+        "x-send-message-request-id": "request-error",
       },
       body: new Uint8Array([1]),
     });

@@ -44,11 +44,11 @@ describe("platform network adapter", () => {
     });
 
     const response = await fetchThroughProxy(
-      "http://send-wechat-target.invalid/v1/health",
+      "http://send-message-target.invalid/v1/health",
     );
 
     await expect(response.json()).resolves.toEqual({ via: "proxy" });
-    expect(requestedUrl).toBe("http://send-wechat-target.invalid/v1/health");
+    expect(requestedUrl).toBe("http://send-message-target.invalid/v1/health");
     expect(reportedFailures).toEqual([]);
   });
 

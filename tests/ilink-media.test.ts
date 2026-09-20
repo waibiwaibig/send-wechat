@@ -1,10 +1,20 @@
-import { mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { createCipheriv } from "node:crypto";
+import {
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { IlinkClient } from "../src/ilink/client.js";
+import type { InboundAttachmentDescriptor } from "../src/ilink/client.js";
 import type { IlinkSendRequest } from "../src/runtime/ports.js";
 
 const temporaryDirectories: string[] = [];
@@ -34,7 +44,7 @@ function jsonResponse(
 describe("iLink media delivery", () => {
   it("rejects unsafe staged files and upload protocol failures without sending", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "send-wechat-media-errors-"),
+      join(tmpdir(), "send-message-media-errors-"),
     );
     temporaryDirectories.push(directory);
     const stagedPath = join(directory, "staged-file");
@@ -105,7 +115,9 @@ describe("iLink media delivery", () => {
   });
 
   it("retries CDN 5xx and malformed successful responses, then cleans encrypted media", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "send-wechat-media-retry-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "send-message-media-retry-"),
+    );
     temporaryDirectories.push(directory);
     const stagedPath = join(directory, "staged-file");
     await writeFile(stagedPath, "hello", { mode: 0o600 });
@@ -156,7 +168,7 @@ describe("iLink media delivery", () => {
   });
 
   it("streams, encrypts, uploads, and sends one generic file", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "send-wechat-media-test-"));
+    const directory = await mkdtemp(join(tmpdir(), "send-message-media-test-"));
     temporaryDirectories.push(directory);
     const stagedPath = join(directory, "staged-file");
     await writeFile(stagedPath, "hello", { mode: 0o600 });
@@ -256,8 +268,109 @@ describe("iLink media delivery", () => {
     expect(await readdir(directory)).toEqual(["staged-file"]);
   });
 
+  it("rejects an explicit image when file-type does not detect an image", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "send-message-media-test-"));
+    temporaryDirectories.push(directory);
+    const stagedPath = join(directory, "staged-file");
+    await writeFile(stagedPath, "plain text", { mode: 0o600 });
+    const fetch = vi.fn(async () => {
+      throw new Error("must not upload an invalid image");
+    });
+    const client = new IlinkClient({ fetch, productVersion: "0.1.0" });
+
+    await expect(
+      client.send({
+        binding: {
+          botId: "bot-id",
+          userId: "user-id",
+          baseUrl: "https://ilinkai.weixin.qq.com",
+          boundAt: "2026-08-24T00:00:00.000Z",
+        },
+        secret: {
+          schemaVersion: 1,
+          botToken: "bot-token",
+          contextToken: "context-token",
+        },
+        payload: {
+          type: "file",
+          mediaKind: "image",
+          stagedPath,
+          fileName: "picture.png",
+          byteLength: 10,
+        },
+        clientId: "client-image",
+      }),
+    ).resolves.toEqual({ status: "failed", code: "INVALID_IMAGE" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps an image as explicit file media when mediaKind is file", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "send-message-media-test-"));
+    temporaryDirectories.push(directory);
+    const stagedPath = join(directory, "picture.png");
+    const png = Buffer.from(
+      "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000000020001e221bc33000000000049454e44ae426082",
+      "hex",
+    );
+    await writeFile(stagedPath, png, { mode: 0o600 });
+    const requests: Array<{ url: string; body: unknown }> = [];
+    const client = new IlinkClient({
+      fetch: async (url, init) => {
+        const target = String(url);
+        requests.push({ url: target, body: init?.body });
+        if (target.endsWith("/ilink/bot/getuploadurl"))
+          return jsonResponse({
+            upload_full_url: "https://cdn.example/upload",
+          });
+        if (target === "https://cdn.example/upload")
+          return new Response(null, {
+            status: 200,
+            headers: { "x-encrypted-param": "download-parameter" },
+          });
+        return jsonResponse({ ret: 0 });
+      },
+      randomBytes: (size) => Buffer.alloc(size, 6),
+      sleep: async () => {},
+      productVersion: "0.1.0",
+    });
+
+    await expect(
+      client.send({
+        binding: {
+          botId: "bot-id",
+          userId: "user-id",
+          baseUrl: "https://ilinkai.weixin.qq.com",
+          boundAt: "2026-08-24T00:00:00.000Z",
+        },
+        secret: {
+          schemaVersion: 1,
+          botToken: "bot-token",
+          contextToken: "context-token",
+        },
+        payload: {
+          type: "file",
+          mediaKind: "file",
+          stagedPath,
+          fileName: "picture.png",
+          byteLength: png.byteLength,
+        },
+        clientId: "client-file-explicit",
+      }),
+    ).resolves.toEqual({
+      status: "accepted",
+      clientMessageId: "client-file-explicit",
+    });
+    const uploadRequest = JSON.parse(String(requests[0]?.body));
+    expect(uploadRequest.media_type).toBe(3);
+    const sendRequest = JSON.parse(String(requests[2]?.body));
+    expect(sendRequest.msg.item_list[0]).toMatchObject({
+      type: 4,
+      file_item: { file_name: "picture.png" },
+    });
+  });
+
   it("retries CDN server failures but never retries a 4xx", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "send-wechat-media-test-"));
+    const directory = await mkdtemp(join(tmpdir(), "send-message-media-test-"));
     temporaryDirectories.push(directory);
     const stagedPath = join(directory, "staged-file");
     await writeFile(stagedPath, "hello", { mode: 0o600 });
@@ -305,4 +418,121 @@ describe("iLink media delivery", () => {
     expect(result).toEqual({ status: "failed", code: "CDN_UPLOAD_4XX" });
     expect(cdnAttempts).toBe(1);
   });
+
+  it("downloads inbound media with image hex and file base64-hex AES keys", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "send-message-inbound-"));
+    temporaryDirectories.push(directory);
+    const imageKeyHex = "00112233445566778899aabbccddeeff";
+    const fileKeyHex = "ffeeddccbbaa99887766554433221100";
+    const imageCiphertext = encrypt(
+      "inbound image",
+      Buffer.from(imageKeyHex, "hex"),
+    );
+    const fileCiphertext = encrypt(
+      "inbound file",
+      Buffer.from(fileKeyHex, "hex"),
+    );
+    const requests: Array<{
+      url: string;
+      redirect: RequestRedirect | undefined;
+    }> = [];
+    const client = new IlinkClient({
+      fetch: async (url, init) => {
+        const target = String(url);
+        requests.push({
+          url: target,
+          redirect: init?.redirect,
+        });
+        return new Response(
+          (target.endsWith("image")
+            ? imageCiphertext
+            : fileCiphertext) as unknown as BodyInit,
+          {
+            status: 200,
+            headers: {
+              "content-length": String(
+                target.endsWith("image")
+                  ? imageCiphertext.length
+                  : fileCiphertext.length,
+              ),
+            },
+          },
+        );
+      },
+      productVersion: "0.1.0",
+    });
+    const image: InboundAttachmentDescriptor = {
+      type: "image",
+      fileName: "image",
+      encryptQueryParam: null,
+      aesKey: Buffer.alloc(16, 9).toString("base64"),
+      fullUrl: "https://novac2c.cdn.weixin.qq.com/c2c/download?kind=image",
+      imageAesKeyHex: imageKeyHex,
+    };
+    const file: InboundAttachmentDescriptor = {
+      type: "file",
+      fileName: "note.txt",
+      encryptQueryParam: null,
+      aesKey: Buffer.from(fileKeyHex, "ascii").toString("base64"),
+      fullUrl: "https://novac2c.cdn.weixin.qq.com/c2c/download?kind=file",
+      imageAesKeyHex: null,
+    };
+    const imagePath = join(directory, "image.bin");
+    const filePath = join(directory, "file.bin");
+    await client.downloadInboundAttachment(image, imagePath);
+    await client.downloadInboundAttachment(file, filePath);
+    await expect(readFile(imagePath, "utf8")).resolves.toBe("inbound image");
+    await expect(readFile(filePath, "utf8")).resolves.toBe("inbound file");
+    if (process.platform !== "win32") {
+      expect((await stat(imagePath)).mode & 0o777).toBe(0o600);
+      expect((await stat(filePath)).mode & 0o777).toBe(0o600);
+    }
+    expect(requests.every(({ redirect }) => redirect === "error")).toBe(true);
+  });
+
+  it("rejects non-CDN inbound URLs and responses over the 100 MiB limit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "send-message-inbound-"));
+    temporaryDirectories.push(directory);
+    const fetch = vi.fn(async () => {
+      throw new Error("must not fetch unsafe URL");
+    });
+    const client = new IlinkClient({ fetch, productVersion: "0.1.0" });
+    const descriptor: InboundAttachmentDescriptor = {
+      type: "file",
+      fileName: "note.txt",
+      encryptQueryParam: "query",
+      aesKey: Buffer.alloc(16).toString("base64"),
+      fullUrl: "https://evil.example/c2c/download?query=query",
+      imageAesKeyHex: null,
+    };
+    await expect(
+      client.downloadInboundAttachment(descriptor, join(directory, "unsafe")),
+    ).rejects.toMatchObject({ code: "INBOUND_MEDIA_URL_INVALID" });
+    expect(fetch).not.toHaveBeenCalled();
+
+    const oversized = new IlinkClient({
+      fetch: async () =>
+        new Response(null, {
+          status: 200,
+          headers: { "content-length": String(100 * 1024 * 1024 + 1) },
+        }),
+      productVersion: "0.1.0",
+    });
+    const destination = join(directory, "oversized");
+    await expect(
+      oversized.downloadInboundAttachment(
+        {
+          ...descriptor,
+          fullUrl: "https://novac2c.cdn.weixin.qq.com/c2c/download?query=query",
+        },
+        destination,
+      ),
+    ).rejects.toMatchObject({ code: "INBOUND_MEDIA_RESPONSE_TOO_LARGE" });
+    await expect(stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });
+
+function encrypt(value: string, key: Buffer): Buffer {
+  const cipher = createCipheriv("aes-128-ecb", key, null);
+  return Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+}

@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "send-wechat-personal-relay",
+  "name": "send-message-personal-relay",
   "main": "src/relay/worker.ts",
   "compatibility_date": "2026-08-24",
   "workers_dev": true,

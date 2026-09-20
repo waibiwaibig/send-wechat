@@ -36,6 +36,7 @@ export type IlinkSendRequest = {
     | { type: "text"; text: string }
     | {
         type: "file";
+        mediaKind?: "image" | "file";
         stagedPath: string;
         fileName: string;
         byteLength: number;

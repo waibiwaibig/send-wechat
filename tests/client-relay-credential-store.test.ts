@@ -43,7 +43,7 @@ afterEach(async () => {
 });
 
 async function fixturePath(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "send-wechat-client-credential-"));
+  const root = await mkdtemp(join(tmpdir(), "send-message-client-credential-"));
   roots.push(root);
   return join(root, "state", "client-credential.json");
 }
@@ -113,7 +113,7 @@ describe("owner-only POSIX client relay credential store", () => {
     "rejects a symlinked credential parent directory",
     async () => {
       const root = await mkdtemp(
-        join(tmpdir(), "send-wechat-client-credential-parent-"),
+        join(tmpdir(), "send-message-client-credential-parent-"),
       );
       roots.push(root);
       const outside = join(root, "outside");
@@ -168,21 +168,23 @@ describe("owner-only POSIX client relay credential store", () => {
       platform,
       arch: "x64",
       username: "alice",
-      stateDir: "/home/alice/.local/state/send-wechat",
-      logDir: "/home/alice/.local/state/send-wechat/logs",
-      runDir: "/home/alice/.local/state/send-wechat/run",
-      socketPath: "/home/alice/.local/state/send-wechat/run/send-wechat.sock",
-      ipcEndpoint: "/home/alice/.local/state/send-wechat/run/send-wechat.sock",
-      stateFile: "/home/alice/.local/state/send-wechat/state.json",
+      stateDir: "/home/alice/.local/state/send-message",
+      logDir: "/home/alice/.local/state/send-message/logs",
+      runDir: "/home/alice/.local/state/send-message/run",
+      socketPath: "/home/alice/.local/state/send-message/run/send-message.sock",
+      ipcEndpoint:
+        "/home/alice/.local/state/send-message/run/send-message.sock",
+      stateFile: "/home/alice/.local/state/send-message/state.json",
       installationFile:
-        "/home/alice/.local/state/send-wechat/installation.json",
+        "/home/alice/.local/state/send-message/installation.json",
       idempotencyFile:
-        "/home/alice/.local/state/send-wechat/idempotency.sqlite3",
-      capabilityFile: "/home/alice/.local/state/send-wechat/capability",
+        "/home/alice/.local/state/send-message/idempotency.sqlite3",
+      capabilityFile: "/home/alice/.local/state/send-message/capability",
       clientCredentialFile:
-        "/home/alice/.local/state/send-wechat/client-credential.json",
-      tempDir: "/home/alice/.local/state/send-wechat/tmp",
-      serviceConfigPath: "/home/alice/.config/systemd/user/send-wechat.service",
+        "/home/alice/.local/state/send-message/client-credential.json",
+      tempDir: "/home/alice/.local/state/send-message/tmp",
+      serviceConfigPath:
+        "/home/alice/.config/systemd/user/send-message.service",
     });
 
     expect(selectRelayCredentialStore(paths("linux"), "client")).toBeInstanceOf(

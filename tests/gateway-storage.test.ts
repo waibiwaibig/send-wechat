@@ -1,4 +1,8 @@
 import {
+  readPrivateJson,
+  writePrivateJson,
+} from "../src/storage/private-json.js";
+import {
   chmod,
   lstat,
   mkdtemp,
@@ -19,8 +23,6 @@ import {
   gatewayConfigSchema,
   gatewayStateSchema,
   JsonGatewayStateStore,
-  readGatewayFile,
-  writeGatewayFile,
 } from "../src/gateway/storage.js";
 
 const roots: string[] = [];
@@ -33,7 +35,7 @@ afterEach(async () => {
 
 async function fixtureRoot(): Promise<string> {
   const root = await mkdtemp(
-    path.join(tmpdir(), "send-wechat-gateway-storage-"),
+    path.join(tmpdir(), "send-message-gateway-storage-"),
   );
   roots.push(root);
   return root;
@@ -41,6 +43,8 @@ async function fixtureRoot(): Promise<string> {
 
 const config = {
   schemaVersion: 1 as const,
+  channel: "wechat" as const,
+  permission: "workspace" as const,
   installationId: "11111111-1111-4111-8111-111111111111",
   codexExecutable: "/opt/codex/bin/codex",
   workingDirectory: "/workspace/project",
@@ -53,12 +57,22 @@ describe("gateway storage", () => {
     const directory = path.join(root, "gateway");
     const file = path.join(directory, "config.json");
 
-    await writeGatewayFile(file, gatewayConfigSchema, config);
+    await writePrivateJson(file, gatewayConfigSchema, config);
 
-    await expect(readGatewayFile(file, gatewayConfigSchema)).resolves.toEqual(
+    await expect(readPrivateJson(file, gatewayConfigSchema)).resolves.toEqual(
       config,
     );
-    expect(await readFile(file, "utf8")).toBe(`${JSON.stringify(config)}\n`);
+    expect(await readFile(file, "utf8")).toBe(
+      `${JSON.stringify({
+        schemaVersion: 1,
+        installationId: config.installationId,
+        channel: config.channel,
+        permission: config.permission,
+        codexExecutable: config.codexExecutable,
+        workingDirectory: config.workingDirectory,
+        searchPath: config.searchPath,
+      })}\n`,
+    );
     expect((await readdir(directory)).sort()).toEqual(["config.json"]);
   });
 
@@ -69,7 +83,7 @@ describe("gateway storage", () => {
       const directory = path.join(root, "gateway");
       const file = path.join(directory, "config.json");
 
-      await writeGatewayFile(file, gatewayConfigSchema, config);
+      await writePrivateJson(file, gatewayConfigSchema, config);
 
       expect((await lstat(directory)).mode & 0o777).toBe(0o700);
       expect((await lstat(file)).mode & 0o777).toBe(0o600);
@@ -84,12 +98,12 @@ describe("gateway storage", () => {
 
     await writeFile(file, "{malformed", "utf8");
     await chmod(file, 0o600);
-    await expect(readGatewayFile(file, gatewayConfigSchema)).rejects.toThrow();
+    await expect(readPrivateJson(file, gatewayConfigSchema)).rejects.toThrow();
 
     await writeFile(file, JSON.stringify({ schemaVersion: 99 }), "utf8");
     await chmod(file, 0o600);
-    await expect(readGatewayFile(file, gatewayConfigSchema)).rejects.toThrow(
-      "GATEWAY_STORAGE_INVALID",
+    await expect(readPrivateJson(file, gatewayConfigSchema)).rejects.toThrow(
+      "PRIVATE_STORAGE_INVALID",
     );
   });
 
@@ -98,16 +112,16 @@ describe("gateway storage", () => {
     const directory = path.join(root, "gateway");
     const file = path.join(directory, "config.json");
     const target = path.join(root, "target.json");
-    await writeGatewayFile(target, gatewayConfigSchema, config);
+    await writePrivateJson(target, gatewayConfigSchema, config);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await symlink(target, file);
 
-    await expect(readGatewayFile(file, gatewayConfigSchema)).rejects.toThrow(
-      "GATEWAY_STORAGE_UNSAFE",
+    await expect(readPrivateJson(file, gatewayConfigSchema)).rejects.toThrow(
+      "PRIVATE_STORAGE_UNSAFE",
     );
     await expect(
-      writeGatewayFile(file, gatewayConfigSchema, config),
-    ).rejects.toThrow("GATEWAY_STORAGE_UNSAFE");
+      writePrivateJson(file, gatewayConfigSchema, config),
+    ).rejects.toThrow("PRIVATE_STORAGE_UNSAFE");
   });
 
   it.skipIf(process.platform === "win32")(
@@ -117,16 +131,16 @@ describe("gateway storage", () => {
       const directory = path.join(root, "gateway");
       const file = path.join(directory, "config.json");
 
-      await writeGatewayFile(file, gatewayConfigSchema, config);
+      await writePrivateJson(file, gatewayConfigSchema, config);
       await chmod(file, 0o644);
-      await expect(readGatewayFile(file, gatewayConfigSchema)).rejects.toThrow(
-        "GATEWAY_STORAGE_UNSAFE",
+      await expect(readPrivateJson(file, gatewayConfigSchema)).rejects.toThrow(
+        "PRIVATE_STORAGE_UNSAFE",
       );
 
       await chmod(file, 0o600);
       await chmod(directory, 0o755);
-      await expect(readGatewayFile(file, gatewayConfigSchema)).rejects.toThrow(
-        "GATEWAY_STORAGE_UNSAFE",
+      await expect(readPrivateJson(file, gatewayConfigSchema)).rejects.toThrow(
+        "PRIVATE_STORAGE_UNSAFE",
       );
     },
   );
@@ -146,7 +160,7 @@ describe("gateway storage", () => {
     await store.save(state);
 
     await expect(store.load()).resolves.toEqual(state);
-    await expect(readGatewayFile(file, gatewayStateSchema)).resolves.toEqual(
+    await expect(readPrivateJson(file, gatewayStateSchema)).resolves.toEqual(
       state,
     );
   });

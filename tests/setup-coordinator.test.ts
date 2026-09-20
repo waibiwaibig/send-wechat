@@ -11,7 +11,7 @@ import type { InstallationState } from "../src/storage/installation-store.js";
 import type { RelayCredential } from "../src/storage/relay-credential-store.js";
 
 describe("one-command setup coordinator", () => {
-  it("provisions a fresh personal Hub, starts it, and binds Weixin without issuing an invitation", async () => {
+  it("provisions a fresh personal Hub when Relay is explicitly requested", async () => {
     let installation: InstallationState | null = null;
     let credential: RelayCredential | null = null;
     const calls: string[] = [];
@@ -60,7 +60,11 @@ describe("one-command setup coordinator", () => {
             return {
               ok: true,
               result: {
-                state: (statusCalls += 1) === 1 ? "not_logged_in" : "ready",
+                channels: {
+                  wechat: {
+                    state: (statusCalls += 1) === 1 ? "not_logged_in" : "ready",
+                  },
+                },
               },
             };
           if (payload.command === "login")
@@ -77,20 +81,22 @@ describe("one-command setup coordinator", () => {
     });
 
     const onAwaitingMessage = vi.fn();
-    await expect(coordinator.setup({ onAwaitingMessage })).resolves.toEqual({
+    await expect(
+      coordinator.setup({ relay: true, onAwaitingMessage }),
+    ).resolves.toEqual({
       ok: true,
       command: "setup",
       result: {
         role: "hub",
-        relayUrl: "https://send-wechat-04040404.alice.workers.dev",
+        relayUrl: "https://send-message-04040404.alice.workers.dev",
         state: "ready",
       },
     });
     expect(installation).toEqual({
       schemaVersion: 1,
       role: "hub",
-      relayUrl: "https://send-wechat-04040404.alice.workers.dev",
-      workerName: "send-wechat-04040404",
+      relayUrl: "https://send-message-04040404.alice.workers.dev",
+      workerName: "send-message-04040404",
       accountId: "account-1",
     });
     expect(credential).toEqual({
@@ -102,13 +108,431 @@ describe("one-command setup coordinator", () => {
     expect(onAwaitingMessage).toHaveBeenCalledOnce();
     expect(calls).toEqual([
       "prepare",
-      `provision:send-wechat-04040404:${Buffer.alloc(32, 32).toString("base64url")}`,
+      `provision:send-message-04040404:${Buffer.alloc(32, 32).toString("base64url")}`,
       "install",
       "start",
       "ipc:status",
       "ipc:login",
       "ipc:status",
     ]);
+  });
+
+  it("creates a local installation by default without loading Relay credentials", async () => {
+    let installation: InstallationState | null = null;
+    const credentialLoad = vi.fn(async () => {
+      throw new Error("native keyring must not be accessed");
+    });
+    const provision = vi.fn();
+    const ipc = vi.fn(async () => ({
+      ok: true,
+      result: { state: "ready" },
+    }));
+    const coordinator = new SetupCoordinator({
+      installationStore: memoryInstallationStore(
+        () => installation,
+        (value) => {
+          installation = value;
+        },
+      ),
+      credentialStore: {
+        load: credentialLoad,
+        save: vi.fn(),
+        delete: vi.fn(),
+      },
+      prepare: vi.fn(),
+      provision,
+      deprovision: vi.fn(),
+      service: {
+        status: async () => ({ installed: false, running: false }),
+        install: vi.fn(),
+        start: vi.fn(),
+      },
+      ipc,
+      pairDevice: vi.fn(),
+      randomBytes: (size) => Buffer.alloc(size),
+      sleep: async () => undefined,
+    });
+
+    await expect(coordinator.setup({})).resolves.toEqual({
+      ok: true,
+      command: "setup",
+      result: { role: "local", state: "ready" },
+    });
+    expect(installation).toEqual({ schemaVersion: 1, role: "local" });
+    expect(credentialLoad).not.toHaveBeenCalled();
+    expect(provision).not.toHaveBeenCalled();
+    expect(ipc).toHaveBeenCalledWith({ command: "status" });
+  });
+
+  it("upgrades an existing local installation to Relay and restarts its running service", async () => {
+    let installation: InstallationState | null = {
+      schemaVersion: 1,
+      role: "local",
+    };
+    let credential: RelayCredential | null = null;
+    const credentialLoad = vi.fn(async () => credential);
+    const restart = vi.fn();
+    const provision = vi.fn(async ({ workerName }: { workerName: string }) => ({
+      accountId: "account-1",
+      workerName,
+      relayUrl: `https://${workerName}.alice.workers.dev`,
+    }));
+    const coordinator = new SetupCoordinator({
+      installationStore: memoryInstallationStore(
+        () => installation,
+        (value) => {
+          installation = value;
+        },
+      ),
+      credentialStore: {
+        load: credentialLoad,
+        save: async (value) => {
+          credential = value;
+        },
+        delete: async () => {
+          credential = null;
+        },
+      },
+      prepare: vi.fn(),
+      provision,
+      deprovision: vi.fn(),
+      service: {
+        status: async () => ({ installed: true, running: true }),
+        install: vi.fn(),
+        start: vi.fn(),
+        restart,
+      },
+      ipc: vi.fn(),
+      pairDevice: vi.fn(),
+      randomBytes: (size) => Buffer.alloc(size, size),
+      sleep: async () => undefined,
+    });
+
+    await expect(
+      coordinator.setup({ relay: true, loginWechat: false }),
+    ).resolves.toMatchObject({
+      result: {
+        role: "hub",
+        relayUrl: "https://send-message-04040404.alice.workers.dev",
+        state: "ready",
+      },
+    });
+    expect(credentialLoad).toHaveBeenCalledOnce();
+    expect(provision).toHaveBeenCalledOnce();
+    expect(restart).toHaveBeenCalledOnce();
+    expect(installation).toMatchObject({ role: "hub" });
+    expect(credential).toMatchObject({ role: "hub" });
+  });
+
+  it("skips Weixin status and login for a Feishu-only setup", async () => {
+    let installation: InstallationState | null = null;
+    const ipc = vi.fn();
+    const coordinator = new SetupCoordinator({
+      installationStore: memoryInstallationStore(
+        () => installation,
+        (value) => {
+          installation = value;
+        },
+      ),
+      credentialStore: {
+        load: vi.fn(),
+        save: vi.fn(),
+        delete: vi.fn(),
+      },
+      prepare: vi.fn(),
+      provision: vi.fn(),
+      deprovision: vi.fn(),
+      service: {
+        status: async () => ({ installed: true, running: true }),
+        install: vi.fn(),
+        start: vi.fn(),
+      },
+      ipc,
+      pairDevice: vi.fn(),
+      randomBytes: (size) => Buffer.alloc(size),
+      sleep: async () => undefined,
+    });
+
+    await expect(coordinator.setup({ loginWechat: false })).resolves.toEqual({
+      ok: true,
+      command: "setup",
+      result: { role: "local", state: "ready" },
+    });
+    expect(ipc).not.toHaveBeenCalled();
+  });
+
+  it("restores the local installation when Relay persistence fails", async () => {
+    const localInstallation: InstallationState = {
+      schemaVersion: 1,
+      role: "local",
+    };
+    let installation: InstallationState | null = localInstallation;
+    let credential: RelayCredential | null = null;
+    let installationSaveAttempts = 0;
+    const saveInstallation = vi.fn(async (value: InstallationState) => {
+      installationSaveAttempts += 1;
+      if (installationSaveAttempts === 1)
+        throw new Error("installation persistence failed");
+      installation = value;
+    });
+    const deprovision = vi.fn(async () => undefined);
+    const coordinator = new SetupCoordinator({
+      installationStore: {
+        load: async () => installation,
+        save: saveInstallation,
+        delete: vi.fn(),
+      },
+      credentialStore: {
+        load: async () => credential,
+        save: async (value) => {
+          credential = value;
+        },
+        delete: async () => {
+          credential = null;
+        },
+      },
+      prepare: vi.fn(),
+      provision: async ({ workerName }) => ({
+        accountId: "account-1",
+        workerName,
+        relayUrl: `https://${workerName}.workers.dev`,
+      }),
+      deprovision,
+      service: {
+        status: async () => ({ installed: false, running: false }),
+        install: vi.fn(),
+        start: vi.fn(),
+      },
+      ipc: vi.fn(),
+      pairDevice: vi.fn(),
+      randomBytes: (size) => Buffer.alloc(size, size),
+      sleep: async () => undefined,
+    });
+
+    await expect(
+      coordinator.setup({ relay: true, loginWechat: false }),
+    ).rejects.toThrow("installation persistence failed");
+    expect(installation).toEqual(localInstallation);
+    expect(credential).toBeNull();
+    expect(saveInstallation).toHaveBeenCalledTimes(2);
+    expect(deprovision).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces Relay cleanup failure after local upgrade persistence fails", async () => {
+    let installation: InstallationState | null = {
+      schemaVersion: 1,
+      role: "local",
+    };
+    let credential: RelayCredential | null = null;
+    let installationSaveAttempts = 0;
+    const deprovision = vi.fn(async () => {
+      throw new Error("deprovision failed");
+    });
+    const coordinator = new SetupCoordinator({
+      installationStore: {
+        load: async () => installation,
+        save: async (value) => {
+          installationSaveAttempts += 1;
+          if (installationSaveAttempts === 1)
+            throw new Error("installation persistence failed");
+          installation = value;
+        },
+        delete: vi.fn(),
+      },
+      credentialStore: {
+        load: async () => credential,
+        save: async (value) => {
+          credential = value;
+        },
+        delete: async () => {
+          credential = null;
+        },
+      },
+      prepare: vi.fn(),
+      provision: async ({ workerName }) => ({
+        accountId: "account-1",
+        workerName,
+        relayUrl: `https://${workerName}.workers.dev`,
+      }),
+      deprovision,
+      service: {
+        status: async () => ({ installed: false, running: false }),
+        install: vi.fn(),
+        start: vi.fn(),
+      },
+      ipc: vi.fn(),
+      pairDevice: vi.fn(),
+      randomBytes: (size) => Buffer.alloc(size, size),
+      sleep: async () => undefined,
+    });
+
+    await expect(
+      coordinator.setup({ relay: true, loginWechat: false }),
+    ).rejects.toMatchObject({ code: "SETUP_HUB_CLEANUP_FAILED" });
+    expect(installation).toEqual({ schemaVersion: 1, role: "local" });
+    expect(credential).toBeNull();
+    expect(deprovision).toHaveBeenCalledOnce();
+  });
+
+  it("upgrades a stopped local service through the normal service start path", async () => {
+    let installation: InstallationState | null = {
+      schemaVersion: 1,
+      role: "local",
+    };
+    let credential: RelayCredential | null = null;
+    const status = vi.fn(async () => ({ installed: false, running: false }));
+    const install = vi.fn(async () => undefined);
+    const start = vi.fn(async () => undefined);
+    const restart = vi.fn(async () => undefined);
+    const coordinator = new SetupCoordinator({
+      installationStore: memoryInstallationStore(
+        () => installation,
+        (value) => {
+          installation = value;
+        },
+      ),
+      credentialStore: {
+        load: async () => credential,
+        save: async (value) => {
+          credential = value;
+        },
+        delete: async () => {
+          credential = null;
+        },
+      },
+      prepare: vi.fn(),
+      provision: async ({ workerName }) => ({
+        accountId: "account-1",
+        workerName,
+        relayUrl: `https://${workerName}.workers.dev`,
+      }),
+      deprovision: vi.fn(),
+      service: { status, install, start, restart },
+      ipc: vi.fn(),
+      pairDevice: vi.fn(),
+      randomBytes: (size) => Buffer.alloc(size, size),
+      sleep: async () => undefined,
+    });
+
+    await expect(
+      coordinator.setup({ relay: true, loginWechat: false }),
+    ).resolves.toMatchObject({ result: { role: "hub", state: "ready" } });
+    expect(status).toHaveBeenCalledTimes(2);
+    expect(install).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it("keeps persisted Hub state and reports a restart failure as repairable", async () => {
+    let installation: InstallationState | null = {
+      schemaVersion: 1,
+      role: "local",
+    };
+    let credential: RelayCredential | null = null;
+    const restart = vi.fn(async () => {
+      throw new Error("restart failed");
+    });
+    const coordinator = new SetupCoordinator({
+      installationStore: memoryInstallationStore(
+        () => installation,
+        (value) => {
+          installation = value;
+        },
+      ),
+      credentialStore: {
+        load: async () => credential,
+        save: async (value) => {
+          credential = value;
+        },
+        delete: async () => {
+          credential = null;
+        },
+      },
+      prepare: vi.fn(),
+      provision: async ({ workerName }) => ({
+        accountId: "account-1",
+        workerName,
+        relayUrl: `https://${workerName}.workers.dev`,
+      }),
+      deprovision: vi.fn(),
+      service: {
+        status: async () => ({ installed: true, running: true }),
+        install: vi.fn(),
+        start: vi.fn(),
+        restart,
+      },
+      ipc: vi.fn(),
+      pairDevice: vi.fn(),
+      randomBytes: (size) => Buffer.alloc(size, size),
+      sleep: async () => undefined,
+    });
+
+    await expect(
+      coordinator.setup({ relay: true, loginWechat: false }),
+    ).rejects.toMatchObject({ code: "SETUP_SERVICE_RESTART_REQUIRED" });
+    expect(installation).toMatchObject({ role: "hub" });
+    expect(credential).toMatchObject({ role: "hub" });
+    expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it("issues an invitation on a fresh Relay setup", async () => {
+    let installation: InstallationState | null = null;
+    let credential: RelayCredential | null = null;
+    const ipc = vi.fn(async (payload: { command: string }) => {
+      expect(payload.command).toBe("pairing_invitation");
+      return { ok: true, result: { invitation: "sw1.fresh" } };
+    });
+    const coordinator = new SetupCoordinator({
+      installationStore: memoryInstallationStore(
+        () => installation,
+        (value) => {
+          installation = value;
+        },
+      ),
+      credentialStore: {
+        load: async () => credential,
+        save: async (value) => {
+          credential = value;
+        },
+        delete: async () => {
+          credential = null;
+        },
+      },
+      prepare: vi.fn(),
+      provision: async ({ workerName }) => ({
+        accountId: "account-1",
+        workerName,
+        relayUrl: `https://${workerName}.workers.dev`,
+      }),
+      deprovision: vi.fn(),
+      service: {
+        status: async () => ({ installed: false, running: false }),
+        install: vi.fn(),
+        start: vi.fn(),
+      },
+      ipc,
+      pairDevice: vi.fn(),
+      randomBytes: (size) => Buffer.alloc(size, size),
+      sleep: async () => undefined,
+    });
+
+    await expect(
+      coordinator.setup({
+        relay: true,
+        issueInvitation: true,
+        loginWechat: false,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      command: "setup",
+      result: {
+        role: "hub",
+        relayUrl: "https://send-message-04040404.workers.dev",
+        state: "ready",
+        invitation: "sw1.fresh",
+      },
+    });
+    expect(ipc).toHaveBeenCalledOnce();
   });
 
   it("adds a fresh remote client without installing a daemon or binding Weixin", async () => {
@@ -311,7 +735,7 @@ describe("one-command setup coordinator", () => {
       schemaVersion: 1,
       role: "hub",
       relayUrl: "https://alice.workers.dev",
-      workerName: "send-wechat-existing",
+      workerName: "send-message-existing",
       accountId: "account-1",
     };
     const credential: RelayCredential = {

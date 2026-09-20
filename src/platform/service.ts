@@ -17,10 +17,10 @@ import {
 import { renameFile } from "./atomic-rename.js";
 
 const DEFAULT_SERVICE_IDENTITY = {
-  label: "io.github.waibiwaibig.send-wechat",
-  linuxServiceName: "send-wechat.service",
-  windowsTaskPrefix: "send-wechat",
-  description: "send-wechat daemon",
+  label: "io.github.waibiwaibig.send-message",
+  linuxServiceName: "send-message.service",
+  windowsTaskPrefix: "send-message",
+  description: "send-message daemon",
 } as const;
 
 export type ServiceStatus = {
@@ -51,6 +51,7 @@ export type ServiceManagerDependencies = {
   readonly cliEntry: string;
   readonly uid: string | number;
   readonly username: string;
+  readonly daemonArgs?: readonly string[];
   readonly identity?: ServiceIdentity;
   readonly commandRunner?: CommandRunnerLike;
   readonly runCommand?: CommandRunnerLike;
@@ -238,8 +239,9 @@ function launchAgentDefinition(
   nodeExecutable: string,
   cliEntry: string,
   label: string,
+  daemonArgs: readonly string[],
 ): string {
-  const argumentsXml = [nodeExecutable, cliEntry, "internal-daemon"]
+  const argumentsXml = [nodeExecutable, cliEntry, ...daemonArgs]
     .map((argument) => `\t\t\t<string>${xmlEscape(argument)}</string>`)
     .join("\n");
   return [
@@ -286,13 +288,14 @@ function systemdUnitDefinition(
   nodeExecutable: string,
   cliEntry: string,
   description: string,
+  daemonArgs: readonly string[],
 ): string {
   return [
     "[Unit]",
     `Description=${/[\\%"]/u.test(description) ? systemdEscape(description) : description}`,
     "",
     "[Service]",
-    `ExecStart=${[nodeExecutable, cliEntry].map(systemdEscape).join(" ")} internal-daemon`,
+    `ExecStart=${[nodeExecutable, cliEntry, ...daemonArgs].map(systemdEscape).join(" ")}`,
     "Restart=on-failure",
     "RestartSec=5s",
     "",
@@ -332,8 +335,11 @@ function scheduledTaskRegistration(
   nodeExecutable: string,
   cliEntry: string,
   taskName: string,
+  daemonArgs: readonly string[],
 ): string {
-  const actionArgument = `${windowsCommandLineArgument(cliEntry)} internal-daemon`;
+  const actionArgument = [cliEntry, ...daemonArgs]
+    .map(windowsCommandLineArgument)
+    .join(" ");
   return [
     "$ErrorActionPreference = 'Stop'",
     "$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name",
@@ -377,6 +383,7 @@ function createManager(
     );
   }
   const identity = normalizeServiceIdentity(dependencies.identity);
+  const daemonArgs = dependencies.daemonArgs ?? ["internal-daemon"];
   const runner =
     dependencies.commandRunner ??
     dependencies.runCommand ??
@@ -447,7 +454,12 @@ function createManager(
     if (platform === "darwin") {
       await writeOwnerConfig(
         paths.serviceConfigPath,
-        launchAgentDefinition(nodeExecutable, cliEntry, identity.label),
+        launchAgentDefinition(
+          nodeExecutable,
+          cliEntry,
+          identity.label,
+          daemonArgs,
+        ),
       );
       return;
     }
@@ -455,7 +467,12 @@ function createManager(
     if (platform === "linux") {
       await writeOwnerConfig(
         paths.serviceConfigPath,
-        systemdUnitDefinition(nodeExecutable, cliEntry, identity.description),
+        systemdUnitDefinition(
+          nodeExecutable,
+          cliEntry,
+          identity.description,
+          daemonArgs,
+        ),
       );
       const reload = await runCommand(runner, platform, "systemctl", [
         "--user",
@@ -477,7 +494,12 @@ function createManager(
 
     await writeOwnerConfig(
       paths.serviceConfigPath,
-      scheduledTaskRegistration(nodeExecutable, cliEntry, windowsTaskName),
+      scheduledTaskRegistration(
+        nodeExecutable,
+        cliEntry,
+        windowsTaskName,
+        daemonArgs,
+      ),
     );
     const result = await runCommand(runner, platform, "powershell.exe", [
       "-NoProfile",

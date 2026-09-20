@@ -273,7 +273,7 @@ describe("iLink module interface", () => {
       },
       base_info: {
         channel_version: "2.4.6",
-        bot_agent: "send-wechat/0.1.0",
+        bot_agent: "send-message/0.1.0",
       },
     });
   });
@@ -355,7 +355,7 @@ describe("iLink module interface", () => {
         get_updates_buf: "cursor",
         base_info: {
           channel_version: "2.4.6",
-          bot_agent: "send-wechat/0.1.0",
+          bot_agent: "send-message/0.1.0",
         },
       },
     ]);
@@ -507,6 +507,81 @@ describe("iLink module interface", () => {
     expect(result.inbound[1]?.id).toMatch(/^[a-f0-9]{64}$/);
     expect(result.inbound[2]?.id).toMatch(/^[a-f0-9]{64}$/);
     expect(result.inbound[3]?.id).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("extracts inbound image and file metadata without downloading them", async () => {
+    let requests = 0;
+    const client = new IlinkClient({
+      fetch: async () => {
+        requests += 1;
+        return response({
+          ret: 0,
+          msgs: [
+            {
+              message_type: 1,
+              from_user_id: "user-id",
+              message_id: 44,
+              context_token: "context-attachment",
+              create_time_ms: 1787558400004,
+              item_list: [
+                {
+                  type: 2,
+                  image_item: {
+                    aeskey: "00112233445566778899aabbccddeeff",
+                    media: {
+                      encrypt_query_param: "image-query",
+                      aes_key: Buffer.alloc(16, 8).toString("base64"),
+                      full_url:
+                        "https://novac2c.cdn.weixin.qq.com/c2c/download?kind=image",
+                    },
+                  },
+                },
+                {
+                  type: 4,
+                  file_item: {
+                    file_name: "note.txt",
+                    media: {
+                      encrypt_query_param: "file-query",
+                      aes_key: Buffer.from(
+                        "ffeeddccbbaa99887766554433221100",
+                        "ascii",
+                      ).toString("base64"),
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        });
+      },
+      productVersion: "0.1.0",
+    });
+    const result = await client.pollUpdates({
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      botToken: "bot-token",
+      cursor: "cursor",
+    });
+    expect(requests).toBe(1);
+    expect(result).toMatchObject({
+      status: "ok",
+      inbound: [
+        {
+          attachments: [
+            {
+              type: "image",
+              fileName: "image",
+              encryptQueryParam: "image-query",
+              imageAesKeyHex: "00112233445566778899aabbccddeeff",
+            },
+            {
+              type: "file",
+              fileName: "note.txt",
+              encryptQueryParam: "file-query",
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("accepts the upstream empty update shape when optional result codes are omitted", async () => {

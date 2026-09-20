@@ -21,13 +21,13 @@ async function fixture(): Promise<{
   endpoint: string;
   tempDir: string;
 }> {
-  const directory = await mkdtemp(join(tmpdir(), "send-wechat-ipc-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "send-message-ipc-test-"));
   directories.push(directory);
   return {
     directory,
     endpoint:
       process.platform === "win32"
-        ? `\\\\.\\pipe\\send-wechat-test-${process.pid}-${Date.now()}`
+        ? `\\\\.\\pipe\\send-message-test-${process.pid}-${Date.now()}`
         : join(directory, "daemon.sock"),
     tempDir: join(directory, "staged"),
   };

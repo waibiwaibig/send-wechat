@@ -24,6 +24,10 @@ export type SetupResult = {
   command: "setup";
   result:
     | {
+        role: "local";
+        state: string;
+      }
+    | {
         role: "hub";
         relayUrl: string;
         state: string;
@@ -72,6 +76,7 @@ export class SetupCoordinator {
         status(): Promise<{ installed: boolean; running: boolean }>;
         install(): Promise<void>;
         start(): Promise<void>;
+        restart?: () => Promise<void>;
       };
       readonly ipc: (
         payload: IpcClientPayload,
@@ -89,23 +94,31 @@ export class SetupCoordinator {
 
   public async setup(options: {
     pair?: string;
+    relay?: boolean;
     issueInvitation?: boolean;
+    loginWechat?: boolean;
     onEvent?: (event: IpcEvent) => Promise<void> | void;
     onVerifyCode?: () => Promise<string | null>;
     onAwaitingMessage?: () => Promise<void> | void;
   }): Promise<SetupResult> {
-    const [installation, credential] = await Promise.all([
-      this.dependencies.installationStore.load(),
-      this.dependencies.credentialStore.load(),
-    ]);
-    if ((installation === null) !== (credential === null))
-      throw new SetupCoordinatorError("INSTALLATION_INCONSISTENT");
+    const installation = await this.dependencies.installationStore.load();
 
     if (options.pair !== undefined) {
       if (installation !== null)
         throw new SetupCoordinatorError("INSTALLATION_ALREADY_CONFIGURED");
       return await this.setupClient(options.pair);
     }
+
+    const relayRequested =
+      options.relay === true || options.issueInvitation === true;
+    const needsCredential =
+      installation?.role === "hub" ||
+      installation?.role === "client" ||
+      (installation?.role === "local" && relayRequested) ||
+      (installation === null && relayRequested);
+    const credential = needsCredential
+      ? await this.dependencies.credentialStore.load()
+      : null;
     if (installation?.role === "client" || credential?.role === "client") {
       if (installation?.role !== "client" || credential?.role !== "client")
         throw new SetupCoordinatorError("INSTALLATION_INCONSISTENT");
@@ -119,17 +132,65 @@ export class SetupCoordinator {
         },
       };
     }
+    if (
+      (installation?.role === "local" || installation === null) &&
+      credential !== null
+    )
+      throw new SetupCoordinatorError("INSTALLATION_INCONSISTENT");
+    if (installation?.role === "hub" && credential?.role !== "hub")
+      throw new SetupCoordinatorError("INSTALLATION_INCONSISTENT");
 
     await this.dependencies.prepare();
-    let hubInstallation = installation;
-    let hubCredential = credential;
+
+    if (!relayRequested) {
+      if (installation === null) {
+        await this.dependencies.installationStore.save({
+          schemaVersion: 1,
+          role: "local",
+        });
+      } else if (installation.role !== "local" && installation.role !== "hub") {
+        throw new SetupCoordinatorError("INSTALLATION_INCONSISTENT");
+      }
+      await this.ensureHubService();
+      const state = await this.completeWechatSetup(options);
+      if (installation?.role === "hub") {
+        return {
+          ok: true,
+          command: "setup",
+          result: {
+            role: "hub",
+            relayUrl: installation.relayUrl,
+            state,
+          },
+        };
+      }
+      return {
+        ok: true,
+        command: "setup",
+        result: { role: "local", state },
+      };
+    }
+
+    const upgradingLocal = installation?.role === "local";
+    let restartRunningService = false;
+    if (upgradingLocal) {
+      const status = await this.dependencies.service.status();
+      restartRunningService = status.running;
+      if (status.running && this.dependencies.service.restart === undefined)
+        throw new SetupCoordinatorError("SETUP_SERVICE_RESTART_REQUIRED");
+    }
+
+    let hubInstallation = installation?.role === "hub" ? installation : null;
+    let hubCredential = credential?.role === "hub" ? credential : null;
     const freshHub = hubInstallation === null && hubCredential === null;
-    if (hubInstallation === null && hubCredential === null) {
+    if (freshHub && installation !== null && !upgradingLocal)
+      throw new SetupCoordinatorError("INSTALLATION_INCONSISTENT");
+    if (freshHub) {
       const suffix = this.dependencies.randomBytes(4);
       const hubAuthToken = this.dependencies.randomBytes(32);
       if (suffix.byteLength !== 4 || hubAuthToken.byteLength !== 32)
         throw new SetupCoordinatorError("SETUP_RANDOM_INVALID");
-      const workerName = `send-wechat-${suffix.toString("hex")}`;
+      const workerName = `send-message-${suffix.toString("hex")}`;
       const provisioned = await this.dependencies.provision({
         workerName,
         hubAuthToken: hubAuthToken.toString("base64url"),
@@ -151,46 +212,40 @@ export class SetupCoordinator {
         await this.dependencies.credentialStore.save(hubCredential);
         await this.dependencies.installationStore.save(hubInstallation);
       } catch (error) {
-        await Promise.allSettled([
+        const cleanup = await Promise.allSettled([
           this.dependencies.credentialStore.delete(),
-          this.dependencies.installationStore.delete(),
+          installation === null
+            ? this.dependencies.installationStore.delete()
+            : this.dependencies.installationStore.save(installation),
           this.dependencies.deprovision({
             workerName: provisioned.workerName,
             accountId: provisioned.accountId,
           }),
         ]);
+        if (cleanup.some((result) => result.status === "rejected"))
+          throw new SetupCoordinatorError("SETUP_HUB_CLEANUP_FAILED");
         throw error;
       }
     }
     if (hubInstallation?.role !== "hub" || hubCredential?.role !== "hub")
       throw new SetupCoordinatorError("INSTALLATION_INCONSISTENT");
 
-    await this.ensureHubService();
-    const status = await this.dependencies.ipc({ command: "status" });
-    let state = extractState(status);
-    if (state === null || state === "not_logged_in" || state === "auth_stale") {
-      const login = await this.dependencies.ipc(
-        { command: "login" },
-        options.onEvent,
-        options.onVerifyCode,
-      );
-      state = extractState(login);
-      if (state === null)
-        throw new SetupCoordinatorError("SETUP_LOGIN_RESPONSE_INVALID");
-    }
-    if (state === "awaiting_message") {
-      await options.onAwaitingMessage?.();
-      for (let attempt = 0; attempt < 300; attempt += 1) {
-        await this.dependencies.sleep(1_000);
-        state = extractState(
-          await this.dependencies.ipc({ command: "status" }),
-        );
-        if (state !== "awaiting_message") break;
+    if (
+      restartRunningService ||
+      (installation?.role === "hub" &&
+        options.relay === true &&
+        (await this.dependencies.service.status()).running)
+    ) {
+      if (this.dependencies.service.restart === undefined)
+        throw new SetupCoordinatorError("SETUP_SERVICE_RESTART_REQUIRED");
+      try {
+        await this.dependencies.service.restart();
+      } catch {
+        throw new SetupCoordinatorError("SETUP_SERVICE_RESTART_REQUIRED");
       }
-      if (state === "awaiting_message" || state === null)
-        throw new SetupCoordinatorError("SETUP_INBOUND_TIMEOUT");
-    }
-    if (freshHub || options.issueInvitation !== true) {
+    } else await this.ensureHubService();
+    const state = await this.completeWechatSetup(options);
+    if (options.issueInvitation !== true) {
       return {
         ok: true,
         command: "setup",
@@ -217,6 +272,41 @@ export class SetupCoordinator {
         invitation,
       },
     };
+  }
+
+  private async completeWechatSetup(options: {
+    loginWechat?: boolean;
+    onEvent?: (event: IpcEvent) => Promise<void> | void;
+    onVerifyCode?: () => Promise<string | null>;
+    onAwaitingMessage?: () => Promise<void> | void;
+  }): Promise<string> {
+    if (options.loginWechat === false) return "ready";
+
+    const status = await this.dependencies.ipc({ command: "status" });
+    let state = extractState(status);
+    if (state === null || state === "not_logged_in" || state === "auth_stale") {
+      const login = await this.dependencies.ipc(
+        { command: "login" },
+        options.onEvent,
+        options.onVerifyCode,
+      );
+      state = extractState(login);
+      if (state === null)
+        throw new SetupCoordinatorError("SETUP_LOGIN_RESPONSE_INVALID");
+    }
+    if (state === "awaiting_message") {
+      await options.onAwaitingMessage?.();
+      for (let attempt = 0; attempt < 300; attempt += 1) {
+        await this.dependencies.sleep(1_000);
+        state = extractState(
+          await this.dependencies.ipc({ command: "status" }),
+        );
+        if (state !== "awaiting_message") break;
+      }
+      if (state === "awaiting_message" || state === null)
+        throw new SetupCoordinatorError("SETUP_INBOUND_TIMEOUT");
+    }
+    return state;
   }
 
   private async setupClient(invitation: string): Promise<SetupResult> {
@@ -321,7 +411,14 @@ function extractState(value: unknown): string | null {
   if (typeof record.state === "string") return record.state;
   if (typeof record.result !== "object" || record.result === null) return null;
   const result = record.result as Record<string, unknown>;
-  return typeof result.state === "string" ? result.state : null;
+  if (typeof result.state === "string") return result.state;
+  if (typeof result.channels !== "object" || result.channels === null)
+    return null;
+  const channels = result.channels as Record<string, unknown>;
+  if (typeof channels.wechat !== "object" || channels.wechat === null)
+    return null;
+  const wechat = channels.wechat as Record<string, unknown>;
+  return typeof wechat.state === "string" ? wechat.state : null;
 }
 
 function extractInvitation(value: unknown): string | null {

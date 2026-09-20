@@ -31,7 +31,7 @@ afterEach(async () => {
 
 describe("user-owned Cloudflare relay provisioning", () => {
   it("authenticates once, deploys with an ephemeral secret file, verifies health, and cleans up", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-cloudflare-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-cloudflare-"));
     directories.push(root);
     const calls: Array<{
       args: readonly string[];
@@ -86,8 +86,8 @@ describe("user-owned Cloudflare relay provisioning", () => {
           `${JSON.stringify({
             type: "deploy",
             version: 1,
-            worker_name: "send-wechat-a1b2c3d4",
-            targets: ["https://send-wechat-a1b2c3d4.alice.workers.dev"],
+            worker_name: "send-message-a1b2c3d4",
+            targets: ["https://send-message-a1b2c3d4.alice.workers.dev"],
           })}\n`,
           "utf8",
         );
@@ -121,13 +121,13 @@ describe("user-owned Cloudflare relay provisioning", () => {
 
     await expect(
       provisioner.provision({
-        workerName: "send-wechat-a1b2c3d4",
+        workerName: "send-message-a1b2c3d4",
         hubAuthToken,
       }),
     ).resolves.toEqual({
       accountId: "account-1",
-      relayUrl: "https://send-wechat-a1b2c3d4.alice.workers.dev",
-      workerName: "send-wechat-a1b2c3d4",
+      relayUrl: "https://send-message-a1b2c3d4.alice.workers.dev",
+      workerName: "send-message-a1b2c3d4",
     });
     expect(calls.map(({ args }) => args[1])).toEqual([
       "auth",
@@ -141,7 +141,7 @@ describe("user-owned Cloudflare relay provisioning", () => {
     );
     expect(calls[2]?.mode).toBe("inherit");
     expect(probed).toEqual([
-      "https://send-wechat-a1b2c3d4.alice.workers.dev/v1/health",
+      "https://send-message-a1b2c3d4.alice.workers.dev/v1/health",
     ]);
     expect(progress).toEqual([
       { stage: "health_check", attempt: 1, maxAttempts: 15 },
@@ -150,7 +150,7 @@ describe("user-owned Cloudflare relay provisioning", () => {
   });
 
   it("fails closed on ambiguous accounts or an untrusted deployment URL", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-cloudflare-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-cloudflare-"));
     directories.push(root);
     const accounts = JSON.stringify({
       loggedIn: true,
@@ -173,7 +173,7 @@ describe("user-owned Cloudflare relay provisioning", () => {
           `${JSON.stringify({
             type: "deploy",
             version: 1,
-            worker_name: "send-wechat-a1b2c3d4",
+            worker_name: "send-message-a1b2c3d4",
             targets: ["https://attacker.example.com"],
           })}\n`,
           "utf8",
@@ -191,7 +191,7 @@ describe("user-owned Cloudflare relay provisioning", () => {
     };
     await expect(
       new CloudflareProvisioner(base).provision({
-        workerName: "send-wechat-a1b2c3d4",
+        workerName: "send-message-a1b2c3d4",
         hubAuthToken,
       }),
     ).rejects.toMatchObject({
@@ -202,7 +202,7 @@ describe("user-owned Cloudflare relay provisioning", () => {
         ...base,
         selectAccount: async (items) => items[1]!.id,
       }).provision({
-        workerName: "send-wechat-a1b2c3d4",
+        workerName: "send-message-a1b2c3d4",
         hubAuthToken,
       }),
     ).rejects.toMatchObject({ code: "CLOUDFLARE_DEPLOY_URL_INVALID" });
@@ -210,7 +210,7 @@ describe("user-owned Cloudflare relay provisioning", () => {
   });
 
   it("deletes only the recorded Worker from the recorded account and cleans up", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-cloudflare-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-cloudflare-"));
     directories.push(root);
     const calls: readonly string[][] = [];
     const mutableCalls = calls as string[][];
@@ -231,7 +231,7 @@ describe("user-owned Cloudflare relay provisioning", () => {
           };
         const configPath = args[args.indexOf("--config") + 1]!;
         expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
-          name: "send-wechat-a1b2c3d4",
+          name: "send-message-a1b2c3d4",
           account_id: "account-1",
         });
         return { exitCode: 0, stdout: "Deleted", stderr: "" };
@@ -247,14 +247,14 @@ describe("user-owned Cloudflare relay provisioning", () => {
 
     await expect(
       provisioner.deprovision({
-        workerName: "send-wechat-a1b2c3d4",
+        workerName: "send-message-a1b2c3d4",
         accountId: "account-1",
       }),
     ).resolves.toBeUndefined();
     expect(mutableCalls[2]).toEqual(
       expect.arrayContaining([
         "delete",
-        "send-wechat-a1b2c3d4",
+        "send-message-a1b2c3d4",
         "--force",
         "--config",
       ]),
@@ -263,7 +263,7 @@ describe("user-owned Cloudflare relay provisioning", () => {
   });
 
   it("removes the exact new Worker when its health check fails", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-cloudflare-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-cloudflare-"));
     directories.push(root);
     const calls: string[][] = [];
     const runner: CloudflareCommandRunner = {
@@ -287,8 +287,8 @@ describe("user-owned Cloudflare relay provisioning", () => {
             `${JSON.stringify({
               type: "deploy",
               version: 1,
-              worker_name: "send-wechat-a1b2c3d4",
-              targets: ["https://send-wechat-a1b2c3d4.alice.workers.dev"],
+              worker_name: "send-message-a1b2c3d4",
+              targets: ["https://send-message-a1b2c3d4.alice.workers.dev"],
             })}\n`,
             "utf8",
           );
@@ -309,14 +309,14 @@ describe("user-owned Cloudflare relay provisioning", () => {
 
     await expect(
       provisioner.provision({
-        workerName: "send-wechat-a1b2c3d4",
+        workerName: "send-message-a1b2c3d4",
         hubAuthToken,
       }),
     ).rejects.toMatchObject({ code: "CLOUDFLARE_HEALTHCHECK_FAILED" });
     expect(calls.find((args) => args.includes("delete"))).toEqual(
       expect.arrayContaining([
         "delete",
-        "send-wechat-a1b2c3d4",
+        "send-message-a1b2c3d4",
         "--force",
         "--config",
       ]),

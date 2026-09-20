@@ -30,7 +30,7 @@ afterEach(async () => {
 
 describe("local IPC capability", () => {
   it("creates one owner-readable random capability and reuses it", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "send-wechat-capability-"));
+    const directory = await mkdtemp(join(tmpdir(), "send-message-capability-"));
     directories.push(directory);
     const filePath = join(directory, "capability");
 
@@ -47,7 +47,7 @@ describe("local IPC capability", () => {
     "rejects a capability readable by other users",
     async () => {
       const directory = await mkdtemp(
-        join(tmpdir(), "send-wechat-capability-"),
+        join(tmpdir(), "send-message-capability-"),
       );
       directories.push(directory);
       const filePath = join(directory, "capability");
@@ -62,7 +62,7 @@ describe("local IPC capability", () => {
 
   it("fails closed for missing, symlinked, oversized, and malformed files", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "send-wechat-capability-errors-"),
+      join(tmpdir(), "send-message-capability-errors-"),
     );
     directories.push(directory);
     await expect(
@@ -97,7 +97,7 @@ describe("local IPC capability", () => {
 
   it("returns an existing capability and does not replace a directory", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "send-wechat-capability-existing-"),
+      join(tmpdir(), "send-message-capability-existing-"),
     );
     directories.push(directory);
     const filePath = join(directory, "capability");

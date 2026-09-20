@@ -153,7 +153,10 @@ function parseFrame(frame: Buffer): z.infer<typeof encryptedFrameSchema> {
 function associatedData(kind: RelayFrameKind, credentialId: string): Buffer {
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(credentialId))
     throw new RelayFrameError("RELAY_FRAME_INVALID");
-  return Buffer.from(`send-wechat-relay\0v1\0${kind}\0${credentialId}`, "utf8");
+  return Buffer.from(
+    `send-message-relay\0v1\0${kind}\0${credentialId}`,
+    "utf8",
+  );
 }
 
 function assertKey(key: Buffer): void {

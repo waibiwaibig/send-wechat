@@ -51,7 +51,7 @@ describe("native personal-relay credential store", () => {
     await expect(store.load()).resolves.toEqual(client);
     await store.delete();
     await expect(store.load()).resolves.toBeNull();
-    expect(entries.every(({ service }) => service === "send-wechat")).toBe(
+    expect(entries.every(({ service }) => service === "send-message")).toBe(
       true,
     );
     expect(entries.every(({ account }) => account === "personal-relay")).toBe(

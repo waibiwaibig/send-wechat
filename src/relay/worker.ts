@@ -9,7 +9,7 @@ const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const BASE64URL = /^[A-Za-z0-9_-]{1,11184811}$/;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
-const INTERNAL_HUB_HEADER = "x-send-wechat-internal-hub";
+const INTERNAL_HUB_HEADER = "x-send-message-internal-hub";
 
 type PendingResponse = {
   resolve(response: Response): void;
@@ -53,7 +53,7 @@ export class PersonalRelay extends DurableObject<Env> {
     if (request.method !== "POST" || url.pathname !== "/v1/request")
       return jsonError(404, "NOT_FOUND", false);
 
-    const requestId = request.headers.get("x-send-wechat-request-id");
+    const requestId = request.headers.get("x-send-message-request-id");
     if (
       requestId === null ||
       !REQUEST_ID.test(requestId) ||
@@ -161,7 +161,7 @@ export default {
       return Response.json(
         {
           ok: true,
-          service: "send-wechat-personal-relay",
+          service: "send-message-personal-relay",
           version: 1,
         },
         { headers: { "cache-control": "no-store" } },

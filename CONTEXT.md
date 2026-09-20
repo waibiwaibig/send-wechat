@@ -1,134 +1,80 @@
-# send-wechat context
+# send-message
 
-## Purpose
-
-`send-wechat` is an unofficial, standalone command-line tool that sends one
-text message or one file to the Weixin user who explicitly bound the tool by
-scanning its QR code. It is not a general Weixin client or an OpenClaw plugin.
-
-The optional `send-wechat-gateway` executable connects this transport to one
-fixed Codex CLI conversation. It runs in a separate background process and
-does not manage Codex's other work sessions. See ADR 0007 and `docs/gateway.md`.
+send-message is an Agent-first command-line tool for delivering text, images, and
+files through WeChat and Feishu. One Hub owns the configured provider credentials
+and fixed recipients. Each user chooses WeChat, Feishu, or both during installation;
+a dual-channel installation has one explicit default.
 
 ## Domain vocabulary
 
-- **binding**: the immutable relationship between the current operating-system
-  user and the Weixin user who completed QR login.
-- **binding user**: the only valid outbound recipient and the only inbound user
-  whose messages may refresh the session.
-- **daemon**: the per-user background process that alone owns credentials,
-  Weixin network access, polling, delivery serialization, and session state.
-- **Hub**: the only machine whose daemon owns a binding and connects directly
-  to Weixin. One binding has exactly one Hub.
-- **remote client**: an authorized machine that owns only a device credential
-  and forwards CLI requests to the Hub; it never binds to Weixin.
-- **Agent-first onboarding**: the public setup flow in which an Agent performs
-  installation, diagnostics, and safe configuration, pausing only for a real
-  account, identity, secret-entry, or device-choice action by the user.
-- **personal relay**: a Worker and Durable Object deployed into the binding
-  user's own Cloudflare account. It relays encrypted live frames and has no
-  persistent message store.
-- **pairing invitation**: a short-lived, single-use, authenticated value issued
-  by the Hub that identifies the personal relay and authorizes one remote
-  client.
-- **session window**: the 24-hour interval beginning at the latest valid inbound
-  message from the binding user.
-- **connection confirmation**: one best-effort outbound acknowledgement when a
-  valid inbound message first moves one binding activation from
-  `awaiting_message` to `ready`. Ordinary session renewals do not trigger it.
-- **renewal due**: the interval from hour 23 until hour 24 of a session window.
-- **accepted**: the Weixin `sendmessage` endpoint returned HTTP success and a
-  zero business result. It does not mean delivered or read.
-- **result unknown**: a send request began but no authoritative business result
-  was received. The daemon must not automatically replay it.
-- **request ID**: a random identifier for one CLI invocation and its logs.
-- **idempotency key**: a caller-provided or CLI-generated key used only for
-  local duplicate suppression. It is not a Weixin delivery guarantee.
-- **protocol pin**: Tencent `openclaw-weixin` tag `v2.4.6`, commit
-  `cef0bfc390393f716903e16d50408118047f87e0`.
+- **Channel**: `wechat` or `feishu`, with independent credentials, limits, inbox,
+  idempotency ledger, and secretary conversation.
+- **Selection**: one channel, or explicit `both`. An omitted selector uses the Hub's
+  default channel. Failure never changes selection.
+- **Local Hub**: single-machine installation, with an owner-only local IPC endpoint.
+  It needs no Cloudflare account or public address.
+- **Relay Hub**: the same provider-owning machine with an optional personal Cloudflare
+  Relay for paired remote clients. The Hub stays online.
+- **Client**: a paired device with its own Relay credential, without provider secrets.
+- **Secretary**: a separately enabled channel-specific Codex CLI conversation. Incoming
+  owner text/images/files enter that conversation and replies use that channel.
+- **Accepted**: the provider acknowledged the request. Device receipt/read state is
+  not inferred. Unknown results remain terminal until human investigation.
 
-## Stable modules and seams
+## Product boundaries
 
-### CLI module
+`send-message` and the complete `.agents/skills/send-message` directory are the public
+sending and Agent installation entry points. The optional `send-message-gateway` runs
+secretary services. The old command and skill names have no compatibility aliases.
+GitHub hosting remains at `waibiwaibig/send-wechat` until separately renamed.
 
-Its interface is the documented command set, human output, versioned JSON
-output, and stable process exit codes. It may read message text, stdin, a user
-file, and the local IPC capability. It never reads Weixin credentials.
+Each channel has one fixed target. WeChat binds by QR to one user. Feishu uses a
+self-built application and targets the installer's DM or one notification group.
+Feishu group commands require both the bound owner open_id and configured chat_id.
+No arbitrary per-send recipients, automatic channel failover, or implicit dual sending.
 
-### Runtime module
+The unified result retains a response per selected channel, including partial success.
+Channels have separate persistent ledgers. Reusing a key with different content fails;
+a completed accepted send is not repeated, and pending/unknown sends are not retried.
 
-Its interface accepts one versioned local request and returns events followed
-by exactly one final result. Behind that interface it owns binding policy,
-session policy, idempotency, delivery serialization, state persistence, and
-redacted logging.
+## Provider boundaries
 
-Small session state is an atomically replaced JSON document. The seven-day
-idempotency ledger is a separate fixed-schema SQLite database backed by the
-Node.js 24 standard library; neither format is a public interface.
+WeChat protocol behavior is pinned to Tencent openclaw-weixin v2.4.6 commit
+`cef0bfc390393f716903e16d50408118047f87e0`. Fresh inbound context enables active sending;
+the local reminder is due at 23 hours and sending blocks at 24 hours. `/recover` is
+handled by the Hub. Upstream rejection can still occur during a locally valid session.
+Image/file downloads use the pinned encrypted CDN protocol and fixed official origin.
 
-### iLink module
+Feishu uses `@larksuiteoapi/node-sdk` for self-built-app credentials, message/resource
+APIs, and long-connection events. Its configured app permissions, target availability,
+API quotas and group membership apply independently of WeChat session policy.
+Custom Webhooks do not satisfy the full product contract.
 
-Its interface exposes QR login, polling, one logical outbound send, and
-best-effort lifecycle notification. It hides Tencent HTTP payloads, headers,
-media encryption, CDN upload, business-result validation, and protocol drift.
+## Trust and lifecycle
 
-### Personal-relay module
+Provider credentials remain in native Hub credential storage. Nonsecret configuration
+and ledgers are owner-only. Remote clients retain only their device credential.
+Relay traffic is authenticated and encrypted; Relay has no durable outgoing queue.
+An offline Hub returns failure. Temporary outgoing uploads are cleaned after delivery.
+Incoming attachments use generated local paths in private bounded storage.
 
-Its interface provisions or removes the user-owned Cloudflare deployment,
-issues and consumes pairing invitations, maintains the Hub's outbound relay
-connection, and transports one versioned encrypted request to the Hub. It hides
-Wrangler, workers.dev discovery, cryptographic framing, reconnect behavior, and
-Cloudflare Durable Object routing. It never exposes Weixin credentials or a
-general recipient interface.
+A secretary consumes only its channel's inbox under an exclusive lease. Inactive
+secretaries do not collect new commands. Each channel has separate configuration,
+service and current thread state. The selected working directory is explicit;
+workspace permissions are the default, full access requires explicit user selection.
+Codex owns conversation history and tool execution.
 
-### Platform modules
+Optional root-task completion/question notifications are a separate opt-in feature.
+They use the unified sender and default or explicitly configured channel selection.
+Child-agent events are excluded. Hook installation and Codex trust are separate checks.
 
-Credential-store and background-service interfaces are the platform seams.
-The Hub uses native per-user credential facilities on macOS, Windows, and
-GNU/Linux. macOS and Linux remote clients use one strict owner-only device
-credential file so SSH/WSL sessions do not depend on Keychain or Secret Service.
-The file contains only the remote client's own relay credential. Windows clients
-use native storage. There is no process-environment credential source or
-role-crossing fallback.
+## Validation
 
-Atomic file replacement is a shared platform operation. Windows readers can
-temporarily block replacement, so the operation retries transient sharing errors
-within a bounded window while retaining the existing destination. Stores retain
-their own validation, exclusive temporary-file creation, syncing and cleanup.
-See ADR 0008.
+Use package.json's check/build scripts. Provider adapters are tested with mocked
+upstream interactions; those tests do not certify a real account's permissions,
+notification settings, or end-to-end secretary delivery. Packaging must include both
+channel references and all linked files in the unified skill directory.
 
-### Optional text inbox and Codex gateway
-
-The Hub's authenticated local text inbox is a generic transport seam. An active
-exclusive consumer lease enables collection of bound-user text; bounded storage
-supports acknowledgement and duplicate suppression. Inbox failure is isolated
-from ordinary session renewal and outbound sends. Relay clients do not consume
-this inbox.
-
-The independent gateway maps inbox text to one Codex app-server thread, maps
-visible reply events to bounded Weixin blocks, and handles the command menu,
-model selection, permission modes, stream delivery preference and `/newchat`. Secretary turns default to
-full access; `/permission` changes the Codex sandbox for subsequent input. It stores
-its own current thread pointer and input-handoff metadata. Codex retains all
-conversation history and execution capabilities. Distinct platform service
-identities allow the gateway and the base Hub to run and stop independently.
-
-## Trust model
-
-- The current operating-system user on an authorized Hub or remote client is
-  trusted. Any process running as that user may invoke the CLI without a second
-  per-send confirmation.
-- Other local users, remote hosts, inbound Weixin message content, user file
-  paths, and all network responses are untrusted inputs.
-- The Cloudflare control plane and personal relay may observe transport
-  metadata but must receive only encrypted message/file frames. The user owns
-  that Cloudflare account; the project operates no shared relay or directory.
-- Administrator/root compromise, Tencent service compromise, and compromise of
-  the current operating-system account are outside the product security claim.
-
-## Product state
-
-The repository is pre-release. Local automated tests and the Workers runtime
-harness cover deterministic seams. A real user-owned Cloudflare deployment,
-QR login, inbound activation, cross-device pairing, platform services, and real
-Weixin text/file delivery remain distinct manual acceptance gates.
+The accepted unified product decision is [ADR 0009](docs/adr/0009-unified-messaging.md).
+Earlier ADRs describe the original WeChat implementation; where scope differs,
+ADR 0009 governs the current product and source implementation.

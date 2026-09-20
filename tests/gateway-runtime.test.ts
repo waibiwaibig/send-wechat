@@ -1,3 +1,7 @@
+import {
+  readPrivateJson,
+  writePrivateJson,
+} from "../src/storage/private-json.js";
 import { randomUUID } from "node:crypto";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -157,8 +161,6 @@ import { runGateway, gatewayStatusSchema } from "../src/gateway/runtime.js";
 import { gatewayPaths } from "../src/gateway/paths.js";
 import {
   gatewayConfigSchema,
-  readGatewayFile,
-  writeGatewayFile,
   type GatewayConfig,
 } from "../src/gateway/storage.js";
 
@@ -276,19 +278,25 @@ async function createHarness(
   const root = await mkdtemp(join(tmpdir(), "gw-"));
   const endpoint =
     process.platform === "win32"
-      ? `\\\\.\\pipe\\send-wechat-gateway-${process.pid}-${randomUUID()}`
+      ? `\\\\.\\pipe\\send-message-gateway-${process.pid}-${randomUUID()}`
       : join(root, "d.sock");
   const capabilityFile = join(root, "capability");
   const hub = hubPaths(root, endpoint, capabilityFile);
   const capability = await loadOrCreateCapability(capabilityFile);
   const config: GatewayConfig = {
     schemaVersion: 1,
+    channel: "wechat",
+    permission: "workspace",
     installationId: randomUUID(),
     codexExecutable: process.execPath,
     workingDirectory: root,
     searchPath: process.env.PATH ?? "",
   };
-  await writeGatewayFile(gatewayPaths(hub).config, gatewayConfigSchema, config);
+  await writePrivateJson(
+    gatewayPaths(hub, "wechat").config,
+    gatewayConfigSchema,
+    config,
+  );
 
   const inbox = new SqliteTextInbox(join(root, "inbox.sqlite3"));
   const requests: IpcServerRequest[] = [];
@@ -432,7 +440,10 @@ async function stop(
 }
 
 async function readStatus(harness: RuntimeHarness) {
-  return readGatewayFile(gatewayPaths(harness.hub).status, gatewayStatusSchema);
+  return readPrivateJson(
+    gatewayPaths(harness.hub, "wechat").status,
+    gatewayStatusSchema,
+  );
 }
 
 describe("gateway runtime integration", () => {
@@ -553,14 +564,14 @@ describe("gateway runtime integration", () => {
       const operation = run(harness, signal.signal);
       await waitForReady(harness, operation);
 
-      await rm(gatewayPaths(harness.hub).directory, {
+      await rm(gatewayPaths(harness.hub, "wechat").directory, {
         recursive: true,
         force: true,
       });
       signal.abort();
       await expect(operation).rejects.toThrow("GATEWAY_CONFIGURATION_REPLACED");
       await expect(
-        access(gatewayPaths(harness.hub).directory),
+        access(gatewayPaths(harness.hub, "wechat").directory),
       ).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -575,16 +586,19 @@ describe("gateway runtime integration", () => {
     await waitFor(
       () => fakeCodex.control.instances.length === 1 && harness.polls >= 2,
     );
-    const before = await readFile(gatewayPaths(harness.hub).status, "utf8");
+    const before = await readFile(
+      gatewayPaths(harness.hub, "wechat").status,
+      "utf8",
+    );
 
     const secondSignal = new AbortController();
     harness.controllers.push(secondSignal);
     const secondRun = run(harness, secondSignal.signal);
     await expect(secondRun).rejects.toThrow("INBOX_BUSY");
     expect(fakeCodex.control.instances).toHaveLength(1);
-    expect(await readFile(gatewayPaths(harness.hub).status, "utf8")).toBe(
-      before,
-    );
+    expect(
+      await readFile(gatewayPaths(harness.hub, "wechat").status, "utf8"),
+    ).toBe(before);
 
     await stop(harness, firstSignal, firstRun);
     await expect(firstRun).resolves.toBeUndefined();

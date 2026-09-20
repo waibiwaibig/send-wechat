@@ -10,7 +10,9 @@ import type {
 import type { TextInboxPollResult } from "../messaging/text-inbox.js";
 
 type RuntimeLike = {
-  execute(command: RuntimeCommand): Promise<unknown>;
+  execute(
+    command: RuntimeCommand & { channel?: "wechat" | "feishu" | "both" },
+  ): Promise<unknown>;
 };
 
 type LoginLike = {
@@ -30,6 +32,7 @@ export type DaemonRequestRouterDependencies = {
   issuePairingInvitation(): string;
   withPollingPaused<T>(operation: () => Promise<T>): Promise<T>;
   inbox?: TextInboxLike;
+  inboxes?: Partial<Record<"wechat" | "feishu", TextInboxLike>>;
 };
 
 export class DaemonRequestRouter {
@@ -58,6 +61,9 @@ export class DaemonRequestRouter {
             type: "send-text",
             requestId: request.requestId,
             idempotencyKey: request.idempotencyKey,
+            ...(request.channel === undefined
+              ? {}
+              : { channel: request.channel }),
             text: request.text,
           }),
           request.requestId,
@@ -69,7 +75,13 @@ export class DaemonRequestRouter {
             type: "send-file",
             requestId: request.requestId,
             idempotencyKey: request.idempotencyKey,
+            ...(request.channel === undefined
+              ? {}
+              : { channel: request.channel }),
             fileName: request.fileName,
+            ...(request.mediaKind === undefined
+              ? {}
+              : { mediaKind: request.mediaKind }),
             byteLength: request.byteLength,
             contentSha256: request.contentSha256,
             stagedPath: request.stagedPath,
@@ -90,16 +102,19 @@ export class DaemonRequestRouter {
         };
       case "inbox_poll":
         return this.handleInbox(() =>
-          this.requireInbox().poll(request.consumerId),
+          this.requireInbox(request.channel).poll(request.consumerId),
         );
       case "inbox_ack":
         return this.handleInbox(() => {
-          this.requireInbox().ack(request.consumerId, request.ids);
+          this.requireInbox(request.channel).ack(
+            request.consumerId,
+            request.ids,
+          );
           return {};
         });
       case "inbox_release":
         return this.handleInbox(() => {
-          this.requireInbox().release(request.consumerId);
+          this.requireInbox(request.channel).release(request.consumerId);
           return {};
         });
       case "reset":
@@ -110,7 +125,12 @@ export class DaemonRequestRouter {
     }
   }
 
-  private requireInbox(): TextInboxLike {
+  private requireInbox(channel?: "wechat" | "feishu"): TextInboxLike {
+    if (channel !== undefined && this.dependencies.inboxes !== undefined) {
+      const inbox = this.dependencies.inboxes[channel];
+      if (inbox === undefined) throw new Error("INBOX_UNAVAILABLE");
+      return inbox;
+    }
     if (this.dependencies.inbox === undefined)
       throw new Error("INBOX_UNAVAILABLE");
     return this.dependencies.inbox;

@@ -1,3 +1,7 @@
+import {
+  readPrivateJson,
+  writePrivateJson,
+} from "../src/storage/private-json.js";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,11 +16,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 import { rename } from "node:fs/promises";
 
 import { renameFile } from "../src/platform/atomic-rename.js";
-import {
-  gatewayConfigSchema,
-  readGatewayFile,
-  writeGatewayFile,
-} from "../src/gateway/storage.js";
+import { gatewayConfigSchema } from "../src/gateway/storage.js";
 
 const roots: string[] = [];
 const mockedRename = vi.mocked(rename);
@@ -38,7 +38,9 @@ async function fixtureFiles(): Promise<{
   original: string;
   temporary: string;
 }> {
-  const directory = await mkdtemp(join(tmpdir(), "send-wechat-atomic-rename-"));
+  const directory = await mkdtemp(
+    join(tmpdir(), "send-message-atomic-rename-"),
+  );
   roots.push(directory);
   const original = join(directory, "status.json");
   const temporary = join(directory, "status.json.tmp");
@@ -149,6 +151,8 @@ describe("atomic rename", () => {
     const { directory, original } = await fixtureFiles();
     const oldConfig = {
       schemaVersion: 1 as const,
+      channel: "wechat",
+      permission: "workspace",
       installationId: "11111111-1111-4111-8111-111111111111",
       codexExecutable: "/opt/codex/bin/codex",
       workingDirectory: "/workspace/project",
@@ -156,19 +160,19 @@ describe("atomic rename", () => {
     };
     await rm(original);
     await rm(`${original}.tmp`);
-    await writeGatewayFile(original, gatewayConfigSchema, oldConfig);
+    await writePrivateJson(original, gatewayConfigSchema, oldConfig);
     mockedRename.mockClear();
     mockedRename.mockRejectedValueOnce(errorWithCode("EIO"));
 
     await expect(
-      writeGatewayFile(original, gatewayConfigSchema, {
+      writePrivateJson(original, gatewayConfigSchema, {
         ...oldConfig,
         searchPath: "/new/path",
       }),
     ).rejects.toMatchObject({ code: "EIO" });
 
     await expect(
-      readGatewayFile(original, gatewayConfigSchema),
+      readPrivateJson(original, gatewayConfigSchema),
     ).resolves.toEqual(oldConfig);
     await expect(readdir(directory)).resolves.toEqual(["status.json"]);
   });

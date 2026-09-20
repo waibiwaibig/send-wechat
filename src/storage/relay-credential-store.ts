@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const SERVICE = "send-wechat";
+const SERVICE = "send-message";
 const ACCOUNT = "personal-relay";
 const MAX_STORED_BYTES = 64 * 1024;
 

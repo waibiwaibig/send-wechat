@@ -20,16 +20,23 @@ afterEach(async () => {
 });
 
 describe("local installation role state", () => {
-  it("round-trips strict Hub and remote-client metadata owner-only", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-installation-"));
+  it("round-trips local, Hub, and remote-client metadata owner-only", async () => {
+    const root = await mkdtemp(join(tmpdir(), "send-message-installation-"));
     directories.push(root);
     const file = join(root, "nested", "installation.json");
     const store = new JsonInstallationStore(file);
+    const local: InstallationState = {
+      schemaVersion: 1,
+      role: "local",
+    };
+    await store.save(local);
+    await expect(store.load()).resolves.toEqual(local);
+
     const hub: InstallationState = {
       schemaVersion: 1,
       role: "hub",
       relayUrl: "https://owner.workers.dev",
-      workerName: "send-wechat-relay",
+      workerName: "send-message-relay",
       accountId: "0123456789abcdef0123456789abcdef",
     };
     await store.save(hub);
@@ -51,7 +58,7 @@ describe("local installation role state", () => {
   });
 
   it("rejects unknown schemas, fields, roles, and unsafe permissions", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-installation-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-installation-"));
     directories.push(root);
     const file = join(root, "installation.json");
     const invalidValues = [
@@ -60,7 +67,7 @@ describe("local installation role state", () => {
         schemaVersion: 1,
         role: "hub",
         relayUrl: "http://owner.workers.dev",
-        workerName: "send-wechat-relay",
+        workerName: "send-message-relay",
       },
       {
         schemaVersion: 1,
@@ -68,6 +75,11 @@ describe("local installation role state", () => {
         relayUrl: "https://owner.workers.dev",
         deviceId: "short",
         extra: true,
+      },
+      {
+        schemaVersion: 1,
+        role: "local",
+        relayUrl: "https://owner.workers.dev",
       },
     ];
     for (const value of invalidValues) {
@@ -83,7 +95,7 @@ describe("local installation role state", () => {
           schemaVersion: 1,
           role: "hub",
           relayUrl: "https://owner.workers.dev",
-          workerName: "send-wechat-relay",
+          workerName: "send-message-relay",
           accountId: "0123456789abcdef0123456789abcdef",
         }),
         { mode: 0o644 },

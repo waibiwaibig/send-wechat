@@ -1,9 +1,9 @@
 import { chmodSync, closeSync, mkdirSync, openSync, lstatSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { dirname } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 
-const SCHEMA_VERSION = 1;
-const SCHEMA_HASH = "send-wechat-text-inbox-v1";
+const SCHEMA_VERSION = 2;
+const SCHEMA_HASH = "send-message-text-inbox-v2";
 const LEASE_MS = 30_000;
 const TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_MESSAGES = 500;
@@ -11,6 +11,9 @@ const MAX_POLL_MESSAGES = 50;
 const MAX_TEXT_LENGTH = 4000;
 const MAX_ID_LENGTH = 256;
 const MAX_CONSUMER_ID_LENGTH = 128;
+const MAX_ATTACHMENTS = 10;
+const MAX_ATTACHMENT_PATH_LENGTH = 16_384;
+const MAX_ATTACHMENT_NAME_LENGTH = 255;
 
 type TextInboxOptions = {
   now?: () => number;
@@ -25,13 +28,21 @@ type MetadataRow = {
 type MessageRow = {
   id: string;
   text: string;
+  attachments: string;
   received_at: number;
+};
+
+export type InboundAttachment = {
+  type: "image" | "file";
+  path: string;
+  fileName: string;
 };
 
 export type InboundText = {
   id: string;
-  text: string;
+  text?: string;
   receivedAt: number;
+  attachments?: InboundAttachment[];
 };
 
 export type TextInboxPollResult = {
@@ -92,18 +103,22 @@ export class SqliteTextInbox {
 
       const rows = database
         .prepare(
-          `SELECT id, text, received_at
+          `SELECT id, text, attachments, received_at
            FROM messages
            ORDER BY sequence ASC
            LIMIT ?`,
         )
         .all(MAX_POLL_MESSAGES) as MessageRow[];
       return {
-        messages: rows.map((row) => ({
-          id: row.id,
-          text: row.text,
-          receivedAt: row.received_at,
-        })),
+        messages: rows.map((row) => {
+          const attachments = parseAttachments(row.attachments);
+          return {
+            id: row.id,
+            text: row.text,
+            receivedAt: row.received_at,
+            ...(attachments.length === 0 ? {} : { attachments }),
+          };
+        }),
         overflow: metadata.overflow === 1,
       };
     });
@@ -190,8 +205,8 @@ export class SqliteTextInbox {
          ON CONFLICT(id) DO NOTHING`,
       );
       const messageInsert = database.prepare(
-        `INSERT INTO messages(id, text, received_at)
-         VALUES (?, ?, ?)
+        `INSERT INTO messages(id, text, attachments, received_at)
+         VALUES (?, ?, ?, ?)
          ON CONFLICT(id) DO NOTHING`,
       );
       for (const message of validMessages) {
@@ -209,7 +224,8 @@ export class SqliteTextInbox {
         }
         const inserted = messageInsert.run(
           message.id,
-          message.text,
+          message.text ?? "",
+          JSON.stringify(message.attachments ?? []),
           message.receivedAt,
         );
         if (Number(inserted.changes) === 1) available -= 1;
@@ -220,6 +236,23 @@ export class SqliteTextInbox {
           .run(overflow ? 1 : 0, SCHEMA_VERSION);
       }
     });
+  }
+
+  /** Check for a live lease without creating the inbox database. */
+  public isActive(): boolean {
+    const database = this.openDatabase(false);
+    if (database === null) return false;
+    try {
+      const now = this.currentTime();
+      const metadata = this.metadata(database);
+      return (
+        metadata.active_consumer !== null &&
+        metadata.lease_until !== null &&
+        metadata.lease_until > now
+      );
+    } catch {
+      return false;
+    }
   }
 
   public close(): void {
@@ -316,7 +349,7 @@ export class SqliteTextInbox {
       database.exec(`
         BEGIN IMMEDIATE;
         CREATE TABLE metadata (
-          schema_version INTEGER PRIMARY KEY CHECK (schema_version = 1),
+          schema_version INTEGER PRIMARY KEY CHECK (schema_version = 2),
           schema_hash TEXT NOT NULL,
           overflow INTEGER NOT NULL CHECK (overflow IN (0, 1)),
           active_consumer TEXT,
@@ -329,6 +362,7 @@ export class SqliteTextInbox {
           sequence INTEGER PRIMARY KEY AUTOINCREMENT,
           id TEXT NOT NULL UNIQUE,
           text TEXT NOT NULL,
+          attachments TEXT NOT NULL,
           received_at INTEGER NOT NULL
         ) STRICT;
         CREATE INDEX messages_received_at ON messages(received_at);
@@ -445,15 +479,60 @@ function isValidId(value: unknown): value is string {
 }
 
 function isValidMessage(value: InboundText): value is InboundText {
+  const attachments = value?.attachments;
+  const validAttachments =
+    attachments === undefined ||
+    (Array.isArray(attachments) &&
+      attachments.length > 0 &&
+      attachments.length <= MAX_ATTACHMENTS &&
+      attachments.every(isValidAttachment));
+  const text = value?.text;
+  const validText =
+    text === undefined ||
+    (typeof text === "string" &&
+      Array.from(text).length <= MAX_TEXT_LENGTH &&
+      !/[\u0000\u007f]/.test(text));
   return (
     value !== null &&
     typeof value === "object" &&
     isValidId(value.id) &&
-    typeof value.text === "string" &&
-    Array.from(value.text).length > 0 &&
-    Array.from(value.text).length <= MAX_TEXT_LENGTH &&
-    !/[\u0000\u007f]/.test(value.text) &&
+    validText &&
+    validAttachments &&
+    ((typeof text === "string" && text.length > 0) ||
+      (Array.isArray(attachments) && attachments.length > 0)) &&
     Number.isSafeInteger(value.receivedAt) &&
     value.receivedAt >= 0
   );
+}
+
+function isValidAttachment(value: unknown): value is InboundAttachment {
+  if (value === null || typeof value !== "object") return false;
+  const attachment = value as Partial<InboundAttachment>;
+  return (
+    (attachment.type === "image" || attachment.type === "file") &&
+    typeof attachment.path === "string" &&
+    attachment.path.length > 0 &&
+    attachment.path.length <= MAX_ATTACHMENT_PATH_LENGTH &&
+    isAbsolute(attachment.path) &&
+    typeof attachment.fileName === "string" &&
+    attachment.fileName.length > 0 &&
+    attachment.fileName.length <= MAX_ATTACHMENT_NAME_LENGTH &&
+    !/[\u0000-\u001f\u007f]/.test(attachment.fileName)
+  );
+}
+
+function parseAttachments(value: string): InboundAttachment[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new TextInboxError("INBOX_SCHEMA_INCOMPATIBLE");
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length > MAX_ATTACHMENTS ||
+    !parsed.every(isValidAttachment)
+  )
+    throw new TextInboxError("INBOX_SCHEMA_INCOMPATIBLE");
+  return parsed;
 }

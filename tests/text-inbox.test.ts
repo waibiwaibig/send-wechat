@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 async function fixture(): Promise<{ directory: string; path: string }> {
-  const directory = await mkdtemp(join(tmpdir(), "send-wechat-inbox-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "send-message-inbox-test-"));
   directories.push(directory);
   return { directory, path: join(directory, "text-inbox.sqlite") };
 }
@@ -258,5 +258,84 @@ describe("SQLite text inbox", () => {
       lock.close();
       inbox.close();
     }
+  });
+
+  it("persists image and file attachments while allowing empty text", async () => {
+    const paths = await fixture();
+    const now = Date.parse("2026-09-08T00:00:00.000Z");
+    const inbox = new SqliteTextInbox(paths.path, { now: () => now });
+    inbox.poll("consumer");
+    inbox.append([
+      {
+        id: "attachments",
+        text: "",
+        receivedAt: now,
+        attachments: [
+          { type: "image", path: "/tmp/in.png", fileName: "in.png" },
+          { type: "file", path: "/tmp/report.pdf", fileName: "report.pdf" },
+        ],
+      },
+    ]);
+    expect(inbox.poll("consumer").messages).toEqual([
+      {
+        id: "attachments",
+        text: "",
+        receivedAt: now,
+        attachments: [
+          { type: "image", path: "/tmp/in.png", fileName: "in.png" },
+          { type: "file", path: "/tmp/report.pdf", fileName: "report.pdf" },
+        ],
+      },
+    ]);
+    inbox.ack("consumer", ["attachments"]);
+    inbox.close();
+  });
+
+  it("rejects unsafe or oversized attachment metadata", async () => {
+    const paths = await fixture();
+    const now = Date.parse("2026-09-08T00:00:00.000Z");
+    const inbox = new SqliteTextInbox(paths.path, { now: () => now });
+    inbox.poll("consumer");
+    inbox.append([
+      {
+        id: "relative",
+        text: "",
+        receivedAt: now,
+        attachments: [{ type: "file", path: "relative.txt", fileName: "x" }],
+      },
+      {
+        id: "control",
+        text: "",
+        receivedAt: now,
+        attachments: [{ type: "file", path: "/tmp/x", fileName: "bad\nname" }],
+      },
+      {
+        id: "too-many",
+        text: "",
+        receivedAt: now,
+        attachments: Array.from({ length: 11 }, (_, index) => ({
+          type: "file" as const,
+          path: `/tmp/${index}`,
+          fileName: `${index}`,
+        })),
+      },
+    ]);
+    expect(inbox.poll("consumer").messages).toEqual([]);
+    inbox.close();
+  });
+
+  it("checks an existing lease without creating storage", async () => {
+    const paths = await fixture();
+    let now = Date.parse("2026-09-08T00:00:00.000Z");
+    const inbox = new SqliteTextInbox(paths.path, { now: () => now });
+    expect(inbox.isActive()).toBe(false);
+    expect(existsSync(paths.path)).toBe(false);
+    inbox.poll("consumer");
+    expect(inbox.isActive()).toBe(true);
+    inbox.release("consumer");
+    expect(inbox.isActive()).toBe(false);
+    now += 31_000;
+    expect(inbox.isActive()).toBe(false);
+    inbox.close();
   });
 });

@@ -31,8 +31,8 @@ function paths(root: string): PlatformPaths {
     stateDir: join(root, "state"),
     logDir: join(root, "logs"),
     runDir: join(root, "run"),
-    socketPath: join(root, "run", "send-wechat.sock"),
-    ipcEndpoint: join(root, "run", "send-wechat.sock"),
+    socketPath: join(root, "run", "send-message.sock"),
+    ipcEndpoint: join(root, "run", "send-message.sock"),
     stateFile: join(root, "state", "state.json"),
     installationFile: join(root, "state", "installation.json"),
     idempotencyFile: join(root, "state", "idempotency.sqlite3"),
@@ -45,7 +45,7 @@ function paths(root: string): PlatformPaths {
 
 describe("owner reset", () => {
   it("clears only client records and a stale local capability", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-local-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-reset-local-"));
     roots.push(root);
     const fixture = paths(root);
     await mkdir(fixture.stateDir, { recursive: true, mode: 0o700 });
@@ -79,7 +79,7 @@ describe("owner reset", () => {
   });
 
   it("refuses local reset when Hub state is present and preserves client files", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-local-hub-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-reset-local-hub-"));
     roots.push(root);
     const fixture = paths(root);
     await mkdir(fixture.stateDir, { recursive: true, mode: 0o700 });
@@ -89,7 +89,7 @@ describe("owner reset", () => {
         schemaVersion: 1,
         role: "hub",
         relayUrl: "https://relay.workers.dev",
-        workerName: "send-wechat-hub",
+        workerName: "send-message-hub",
         accountId: "account",
       }),
       { mode: 0o600 },
@@ -105,7 +105,7 @@ describe("owner reset", () => {
   });
 
   it("deletes binding and data without following symlinks", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-reset-"));
     roots.push(root);
     const fixture = paths(root);
     await mkdir(fixture.stateDir, { recursive: true });
@@ -146,7 +146,7 @@ describe("owner reset", () => {
   });
 
   it("preserves a service configuration located inside stateDir", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-reset-"));
     roots.push(root);
     const base = paths(root);
     const fixture = {
@@ -165,7 +165,7 @@ describe("owner reset", () => {
   });
 
   it("unlinks a symlinked reset root without recreating or following it", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-reset-"));
     roots.push(root);
     const fixture = paths(root);
     const outside = join(root, "outside-directory");
@@ -187,7 +187,7 @@ describe("owner reset", () => {
   });
 
   it("removes nested directories, preserves descendants of the service path, and tolerates absent roots", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-nested-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-reset-nested-"));
     roots.push(root);
     const fixture = paths(root);
     await mkdir(fixture.stateDir, { recursive: true });
@@ -211,7 +211,7 @@ describe("owner reset", () => {
   });
 
   it("does not touch non-directory roots and propagates credential failures", async () => {
-    const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-errors-"));
+    const root = await mkdtemp(join(tmpdir(), "send-message-reset-errors-"));
     roots.push(root);
     const fixture = paths(root);
     await writeFile(fixture.stateDir, "not a directory");
@@ -237,7 +237,7 @@ describe("owner reset", () => {
   it.skipIf(process.platform === "win32")(
     "deletes a Linux client's file credential without requiring a keyring",
     async () => {
-      const root = await mkdtemp(join(tmpdir(), "send-wechat-reset-client-"));
+      const root = await mkdtemp(join(tmpdir(), "send-message-reset-client-"));
       roots.push(root);
       const fixture = {
         ...paths(root),

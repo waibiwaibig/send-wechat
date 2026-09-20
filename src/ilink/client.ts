@@ -18,13 +18,19 @@ import {
   type PlatformFetch,
 } from "../platform/network.js";
 import type { IlinkPort, IlinkSendRequest } from "../runtime/ports.js";
+import {
+  downloadInboundAttachment as downloadInboundAttachmentFile,
+  INBOUND_MEDIA_CDN_BASE_URL,
+  type InboundAttachmentDescriptor,
+} from "./inbound-media.js";
+
+export type { InboundAttachmentDescriptor } from "./inbound-media.js";
 
 export const ILINK_PROTOCOL_VERSION = "2.4.6" as const;
 export const ILINK_PROTOCOL_COMMIT =
   "cef0bfc390393f716903e16d50408118047f87e0" as const;
 export const ILINK_LOGIN_BASE_URL = "https://ilinkai.weixin.qq.com" as const;
-export const ILINK_CDN_BASE_URL =
-  "https://novac2c.cdn.weixin.qq.com/c2c" as const;
+export const ILINK_CDN_BASE_URL = INBOUND_MEDIA_CDN_BASE_URL;
 
 const ILINK_APP_ID = "bot";
 const ILINK_BOT_TYPE = "3";
@@ -66,6 +72,7 @@ export type PollUpdatesResult =
         createTimeMs: number | null;
         id?: string;
         text?: string;
+        attachments?: InboundAttachmentDescriptor[];
       }>;
     }
   | { status: "auth_stale" }
@@ -274,6 +281,7 @@ export class IlinkClient implements IlinkPort {
       prepared = await this.prepareMedia(
         request.payload.stagedPath,
         request.payload.byteLength,
+        request.payload.mediaKind,
       );
       const upload = await this.requestUpload(request, prepared);
       if (upload.status !== "ok") return upload;
@@ -319,6 +327,7 @@ export class IlinkClient implements IlinkPort {
   private async prepareMedia(
     stagedPath: string,
     expectedSize: number,
+    mediaKind?: "image" | "file",
   ): Promise<PreparedMedia> {
     const metadata = await lstat(stagedPath);
     if (!metadata.isFile() || metadata.isSymbolicLink()) {
@@ -333,16 +342,25 @@ export class IlinkClient implements IlinkPort {
     }
 
     const detected = await fileTypeFromFile(stagedPath).catch(() => undefined);
-    const mediaType = detected?.mime.startsWith("image/")
-      ? 1
-      : detected?.mime.startsWith("video/")
-        ? 2
-        : 3;
+    let mediaType: 1 | 2 | 3;
+    if (mediaKind === "image") {
+      if (detected === undefined || !detected.mime.startsWith("image/"))
+        throw new IlinkProtocolError("INVALID_IMAGE");
+      mediaType = 1;
+    } else if (mediaKind === "file") {
+      mediaType = 3;
+    } else {
+      mediaType = detected?.mime.startsWith("image/")
+        ? 1
+        : detected?.mime.startsWith("video/")
+          ? 2
+          : 3;
+    }
     const fileKey = this.randomBytes(16).toString("hex");
     const aesKey = this.randomBytes(16);
     const encryptedPath = join(
       dirname(stagedPath),
-      `.send-wechat-${randomUUID()}.encrypted`,
+      `.send-message-${randomUUID()}.encrypted`,
     );
     const hash = createHash("md5");
     const hashTap = new Transform({
@@ -534,6 +552,7 @@ export class IlinkClient implements IlinkPort {
       suggestedTimeoutMs: this.longPollTimeoutMs,
       inbound: parsed.data.msgs.map((message) => {
         const text = extractInboundText(message.item_list);
+        const attachments = extractInboundAttachments(message.item_list);
         const id = inboundMessageId(
           message.message_id,
           message.from_user_id,
@@ -547,9 +566,19 @@ export class IlinkClient implements IlinkPort {
           createTimeMs: message.create_time_ms ?? null,
           ...(id === undefined ? {} : { id }),
           ...(text === undefined ? {} : { text }),
+          ...(attachments.length === 0 ? {} : { attachments }),
         };
       }),
     };
+  }
+
+  public async downloadInboundAttachment(
+    descriptor: InboundAttachmentDescriptor,
+    destination: string,
+  ): Promise<void> {
+    await downloadInboundAttachmentFile(descriptor, destination, {
+      fetch: this.fetch,
+    });
   }
 
   public async createQr(localBotTokens: readonly string[]): Promise<{
@@ -651,7 +680,7 @@ export class IlinkClient implements IlinkPort {
   private baseInfo(): { channel_version: string; bot_agent: string } {
     return {
       channel_version: ILINK_PROTOCOL_VERSION,
-      bot_agent: `send-wechat/${this.dependencies.productVersion}`,
+      bot_agent: `send-message/${this.dependencies.productVersion}`,
     };
   }
 
@@ -851,4 +880,58 @@ function extractInboundText(itemList: unknown): string | undefined {
     segments.push(text);
   }
   return segments.length === 0 ? undefined : segments.join("");
+}
+
+function extractInboundAttachments(
+  itemList: unknown,
+): InboundAttachmentDescriptor[] {
+  if (!Array.isArray(itemList) || itemList.length > 1000) return [];
+  const attachments: InboundAttachmentDescriptor[] = [];
+  for (const item of itemList) {
+    if (attachments.length >= 10 || item === null || typeof item !== "object")
+      break;
+    const record = item as Record<string, unknown>;
+    if (record.type !== 2 && record.type !== 4) continue;
+    const itemRecord = record.type === 2 ? record.image_item : record.file_item;
+    if (itemRecord === null || typeof itemRecord !== "object") continue;
+    const media = (itemRecord as Record<string, unknown>).media;
+    if (media === null || typeof media !== "object") continue;
+    const mediaRecord = media as Record<string, unknown>;
+    attachments.push({
+      type: record.type === 2 ? "image" : "file",
+      fileName:
+        record.type === 2
+          ? "image"
+          : (boundedAttachmentString(
+              (itemRecord as Record<string, unknown>).file_name,
+              255,
+            ) ?? "file"),
+      encryptQueryParam: boundedAttachmentString(
+        mediaRecord.encrypt_query_param,
+        64 * 1024,
+      ),
+      aesKey: boundedAttachmentString(mediaRecord.aes_key, 64 * 1024),
+      fullUrl: boundedAttachmentString(mediaRecord.full_url, 16 * 1024),
+      imageAesKeyHex:
+        record.type === 2
+          ? boundedAttachmentString(
+              (itemRecord as Record<string, unknown>).aeskey,
+              128,
+            )
+          : null,
+    });
+  }
+  return attachments;
+}
+
+function boundedAttachmentString(
+  value: unknown,
+  maxLength: number,
+): string | null {
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maxLength &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+    ? value
+    : null;
 }
