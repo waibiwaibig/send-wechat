@@ -37,5 +37,5 @@ After delivery works, offer [Codex notifications](notifications.md) and
 [the Codex secretary](gateway.md) separately. Additional devices use the optional
 Relay described in [setup.md](setup.md). Keep declined features off.
 
-Keep secrets and live binding/pairing codes out of logs, committed files, and reports.
+Keep secrets and live login/pairing codes out of logs, committed files, and reports.
 Show an installation code only to the installing user. Reset requires the user's request.

@@ -6,7 +6,7 @@ reuse prior answers, and retain a short nonsecret progress note when waiting.
 ## 1. Choose
 
 Ask **WeChat, Feishu, or both**. WeChat needs QR activation and ongoing session renewal;
-Feishu uses a guided app-creation scan and one recipient-binding message. Both requires
+Feishu uses a guided app-creation scan and one ordinary message from the app creator to select the conversation. Both requires
 an explicit default channel. Confirm the installation machine; a previously mentioned
 remote host alone does not authorize installing there. Start with a local Hub.
 

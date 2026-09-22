@@ -425,7 +425,7 @@ export class CliContext {
       if (channels.includes("feishu")) {
         const service = options.feishuRebind ? this.getServiceManager() : null;
         const wasRunning = service !== null && (await service.status()).running;
-        // Keep the one-use binding challenge out of an active secretary inbox.
+        // Keep the setup verification message out of an active secretary inbox.
         if (wasRunning) await service.stop();
         try {
           await setupFeishu(paths.stateDir, {

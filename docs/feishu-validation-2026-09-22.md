@@ -1,5 +1,8 @@
 # Feishu repair validation — 2026-09-22
 
+This record describes commit `dce16af`, before the subsequent first-message onboarding
+change. Its live delivery result does not certify that later onboarding flow.
+
 The first-use report covered an unsupported event flag, dropped text with an empty
 attachment array, private-chat delivery targeting, an unclassified Markdown send,
 and insufficient health diagnostics.

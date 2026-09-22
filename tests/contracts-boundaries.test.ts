@@ -97,6 +97,15 @@ describe("CLI contract boundaries", () => {
   it("provides localized messages and safely handles backpressure", async () => {
     expect(localizedMessage("NOT_LOGGED_IN", "zh-CN")).toContain("尚未登录");
     expect(localizedMessage("NOT_LOGGED_IN", "en")).toContain("not logged in");
+    expect(localizedMessage("FEISHU_BINDING_TIMEOUT", "zh-CN")).toContain(
+      "向飞书机器人发送任意消息",
+    );
+    expect(localizedMessage("FEISHU_BINDING_TIMEOUT", "en")).toContain(
+      "send any message to the Feishu bot",
+    );
+    expect(localizedMessage("FEISHU_APP_IDENTITY_INVALID", "zh-CN")).toContain(
+      "确认飞书应用创建者",
+    );
     expect(localizedMessage("SESSION_EXPIRED", "zh-CN")).toContain(
       "微信会话已过期，请先给 ClawBot 单独发送 /recover",
     );

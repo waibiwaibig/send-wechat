@@ -46,8 +46,9 @@ handled by the Hub. Upstream rejection can still occur during a locally valid se
 Image/file downloads use the pinned encrypted CDN protocol and fixed official origin.
 
 Feishu uses pinned `@larksuite/cli` subprocesses for app creation, credentials,
-message/resource APIs and long-connection events. A one-use challenge binds the owner
-and destination automatically. CLI credentials live in its isolated Hub profile. Its configured app permissions, target availability,
+message/resource APIs and long-connection events. Setup verifies the app creator through
+the application API, then uses their first fresh message to bind the destination.
+CLI credentials live in its isolated Hub profile. Its configured app permissions, target availability,
 API quotas and group membership apply independently of WeChat session policy.
 Custom Webhooks do not satisfy the full product contract.
 

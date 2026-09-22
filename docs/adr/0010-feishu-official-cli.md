@@ -1,6 +1,6 @@
 # ADR 0010: Feishu through the official CLI
 
-Status: Accepted, 2026-09-20.
+Status: Accepted, 2026-09-20. First-message onboarding updated 2026-09-22.
 
 ## Decision
 
@@ -13,9 +13,10 @@ The official CLI owns app creation and credentials in an isolated send-message p
 The sender owns fixed recipient configuration, owner authorization, queues and persistent
 idempotency. Commands run as the application bot with argument arrays and structured
 responses. No personal OAuth login is required. Setup displays the official registration
-link, waits for event readiness, and binds a fresh user message carrying a one-use
-challenge. A group binding additionally checks the bot mention and fixes both the owner
-and group. Rerunning setup reuses credentials and completed bindings; explicit rebind
+link, resolves the current application creator with the application-information API,
+waits for event readiness, and displays a direct bot-chat AppLink with desktop/mobile
+search instructions. The creator sends any fresh message to bind a DM; a group binding
+requires a bot mention followed by ordinary text and fixes both the owner and group. Rerunning setup reuses credentials and completed bindings; explicit rebind
 replaces a target only after successful verification.
 
 Both sending and optional secretary receiving use CLI subprocesses. Incoming events use
@@ -24,7 +25,7 @@ Only bound-owner messages reach the secretary. Subscription startup waits for th
 marker and keeps stdin open. Child process failures must not masquerade as delivery.
 Unknown send outcomes remain terminal in the existing ledger.
 
-DM bindings retain the challenge event's private chat ID as well as the owner open ID.
+DM bindings retain the first authorized message's private chat ID and the app creator's open ID.
 All outgoing messages address that verified chat; incoming DMs require both the owner
 and that same private chat. Existing DM configurations without a chat ID require an
 explicit rebind. A failed rebind leaves the previous configuration intact.
@@ -37,6 +38,13 @@ The ledger retains the safe cause and outcome category across daemon restarts.
 Status reports configuration readiness separately from observed listener, inbox and
 send health. Observation timestamps are process-local; the persistent ledger remains
 the source for a particular idempotency key's outcome.
+
+The pinned CLI requests scanner user information internally but omits it from its
+`config init --new` output. Setup therefore queries
+`GET /open-apis/application/v6/applications/me` with `user_id_type=open_id` and uses
+`app.creator_id` as its authorization source. Identity lookup failure stops setup
+before message binding. Existing complete bindings remain reusable. No random code
+or extra user confirmation is required.
 
 ## Consequences
 
@@ -63,3 +71,11 @@ or clean WSL service/restart acceptance.
   and [successful API payload extraction](https://github.com/larksuite/cli/blob/v1.0.96/internal/output/envelope_success.go#L17-L49).
   Local binary contracts are checked using `event consume --help`, `im files create --help`,
   `im images create --help`, and the corresponding `schema` commands; these perform no delivery.
+
+- [Application information API — own-app lookup and creator identity](https://open.feishu.cn/document/server-docs/application-v6/application/get).
+  The official SDK defines
+  [Application.CreatorId as the app creator/owner](https://github.com/larksuite/oapi-sdk-go/blob/main/service/application/v6/model.go#L3103-L3106)
+  and supports [me in GetApplicationReqBuilder.AppId](https://github.com/larksuite/oapi-sdk-go/blob/main/service/application/v6/model.go#L8162-L8185).
+- [Pinned CLI registration result fields](https://github.com/larksuite/cli/blob/v1.0.96/internal/auth/app_registration.go#L70-L81)
+  and [public config-init output](https://github.com/larksuite/cli/blob/v1.0.96/cmd/config/init.go#L431-L439).
+- [Bot-opening AppLink — showRobot example](https://www.feishu.cn/content/7270877743058698268).

@@ -272,8 +272,9 @@ export function localizedMessage(
       en: "Run setup --channels feishu to configure and bind the bot.",
     },
     FEISHU_BINDING_TIMEOUT: {
-      "zh-CN": "飞书绑定码已过期，请重新运行 setup 获取新码。",
-      en: "Feishu binding expired. Run setup again for a fresh code.",
+      "zh-CN":
+        "等待你的消息超时；请重新运行 setup，然后向飞书机器人发送任意消息。",
+      en: "Timed out waiting for your message; rerun setup and send any message to the Feishu bot.",
     },
     FEISHU_CONNECTION_CLOSED: {
       "zh-CN": "飞书事件连接已中断，检查网络和应用事件权限后重新运行 setup。",
@@ -282,6 +283,10 @@ export function localizedMessage(
     FEISHU_REBIND_REQUIRED: {
       "zh-CN": "更换飞书接收目标请同时使用 --feishu-rebind。",
       en: "Use --feishu-rebind to change the Feishu destination.",
+    },
+    FEISHU_APP_IDENTITY_INVALID: {
+      "zh-CN": "无法确认飞书应用创建者，请确认当前应用配置并重试 setup。",
+      en: "Could not verify the Feishu app creator; check the app configuration and rerun setup.",
     },
     CLI_NOT_FOUND: {
       "zh-CN":

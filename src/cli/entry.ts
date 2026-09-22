@@ -89,7 +89,7 @@ function buildProgram(
     )
     .option(
       "--feishu-rebind",
-      "replace the Feishu recipient using a new binding code",
+      "replace the Feishu recipient using a fresh message from the app creator",
     )
     .option("--relay", "enable a personal Relay for additional devices")
     .action(async (options: Record<string, unknown>) => {

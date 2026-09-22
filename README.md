@@ -6,7 +6,7 @@
 > https://github.com/waibiwaibig/send-wechat
 
 AI 会确认你要安装微信、飞书还是两者，并与你配合完成安装、账号配置和测试收信。
-飞书接入使用随包安装的官方 CLI：你扫码创建应用，再给机器人发送一次绑定码。
+飞书接入使用随包安装的官方 CLI：你扫码创建应用，点击安装提示中的链接打开机器人私聊，随便发一条消息即可。
 无需手动查 open_id 或复制应用密钥；AI 负责环境检查、安装、配置和排错，必要时引导管理员审批。
 
 **给接手的 AI：**若用户希望安装或连接，请先读取
@@ -45,11 +45,11 @@ Codex 可使用 `~/.agents/skills/send-message/`，Claude Code 使用
 飞书：`send-message setup --channels feishu`。
 双渠道使用 `--channels both --default-channel wechat|feishu`。
 飞书默认绑定自己的私聊；指定通知群时加 `--feishu-target group`。
-更换目标使用 `setup --feishu-rebind`，按新绑定码确认。完整步骤见 [飞书指南](.agents/skills/send-message/feishu.md)。
+更换目标使用 `setup --feishu-rebind`，由应用创建者在目标会话发送一条新消息。完整步骤见 [飞书指南](.agents/skills/send-message/feishu.md)。
 
 私聊绑定同时保存本人身份和该私聊的 `chat_id`。升级后若提示
 `FEISHU_REBIND_REQUIRED`，运行 `send-message setup --channels feishu --feishu-target dm --feishu-rebind`，
-在原机器人私聊发送新绑定码。只有新绑定成功才会替换原配置。
+按安装提示打开机器人私聊，随便发送一条新消息。只有新绑定成功才会替换原配置。
 已有自定义 Webhook 需要改为应用机器人，才能使用本工具的文件发送和双向秘书能力。
 
 单台电脑直接使用本地服务，不需要 Cloudflare。多台电脑共用一个常在线 Hub 时，
