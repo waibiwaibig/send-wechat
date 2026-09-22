@@ -33,9 +33,10 @@ internally. Recipient changes go through setup and a new binding.
 
 ## Optional features
 
-After delivery works, offer [Codex notifications](notifications.md) and
-[the Codex secretary](gateway.md) separately. Additional devices use the optional
-Relay described in [setup.md](setup.md). Keep declined features off.
+After delivery works, follow [setup.md](setup.md)'s secretary enablement question.
+When enabled, follow [gateway.md](gateway.md)'s optional role setup before starting it.
+Offer [Codex notifications](notifications.md) separately. Additional devices use the
+optional Relay described in [setup.md](setup.md). Keep declined features off.
 
 Keep secrets and live login/pairing codes out of logs, committed files, and reports.
 Show an installation code only to the installing user. Reset requires the user's request.

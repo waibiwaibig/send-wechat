@@ -59,11 +59,19 @@ For a failure, keep its safe error code and idempotency key, repair that step, a
 Do not reset a working channel or retry an unknown send automatically. Report machine,
 version, channels/default, recipient, confirmed receipt, and remaining unverified items.
 
-## 5. Optional extensions
+## 5. Choose whether to enable the secretary
 
-After receipt, offer [notifications](notifications.md) and [secretary](gateway.md)
-separately. Notification-only use does not run a persistent incoming-message consumer;
-Feishu uses one temporarily during binding.
+After confirmed receipt, ask once: “要开启秘书吗？开启后，你可以直接在微信或飞书里发消息，让 Codex 处理并回复。”
+Reuse an explicit earlier choice. If declined, leave the secretary off and skip role
+setup. If enabled, follow [gateway.md](gateway.md), including its optional role question
+before starting the service. A direct secretary setup request already supplies the
+enablement choice. Ordinary sending and repair do not repeat this onboarding offer.
+
+## 6. Other optional extensions
+
+Offer [notifications](notifications.md) separately from the secretary. Notification-only
+use does not run a persistent incoming-message consumer; Feishu uses one temporarily
+during binding.
 
 Only for explicitly requested additional devices: choose an always-online Hub and run
 `send-message setup --relay`. Guide Cloudflare authorization/account selection. Install
