@@ -12,18 +12,16 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  FeishuClient,
-  type FeishuConfig,
-  type FeishuPayload,
-} from "../src/feishu/client.js";
+import { FeishuClient, type FeishuPayload } from "../src/feishu/client.js";
 import { FeishuCliError, type FeishuCliRunner } from "../src/feishu/cli.js";
+import type { FeishuConfiguration } from "../src/messaging/config.js";
 
-const config: FeishuConfig = {
+const config: FeishuConfiguration = {
   profile: "send-message",
   receiveIdType: "open_id",
-  receiveId: "ou-target",
-  ownerOpenId: "ou-owner",
+  receiveId: "ou_owner",
+  ownerOpenId: "ou_owner",
+  dmChatId: "oc_dm",
 };
 
 const roots: string[] = [];
@@ -52,11 +50,30 @@ async function stateRoot(): Promise<string> {
 }
 
 describe("FeishuClient CLI adapter", () => {
+  it.each([
+    "CLI_OUTPUT_TOO_LARGE",
+    "CLI_COMMAND_FAILED",
+    "CLI_CONNECTION_RESET",
+  ])(
+    "keeps %s uncertain when submission may already have happened",
+    async (code) => {
+      const run = vi.fn().mockRejectedValue(new FeishuCliError(code));
+      const client = new FeishuClient(
+        config,
+        join(await stateRoot(), "state"),
+        runner(run),
+      );
+      await expect(
+        client.send({ type: "text", text: "hello" }, "uncertain"),
+      ).resolves.toEqual({ status: "unknown", code: `SEND_${code}` });
+      expect(run).toHaveBeenCalledTimes(1);
+    },
+  );
   it("rejects invalid targets, client IDs, and media metadata before sending", async () => {
     const root = await stateRoot();
     const run = vi.fn(async () => ({ message_id: "om-never" }));
     const invalidProfile = new FeishuClient(
-      { ...config, profile: "" },
+      { ...config, profile: "" } as unknown as FeishuConfiguration,
       join(root, "state"),
       runner(run),
     );
@@ -65,7 +82,7 @@ describe("FeishuClient CLI adapter", () => {
     ).resolves.toEqual({ status: "failed", code: "INVALID_PROFILE" });
 
     const invalidTarget = new FeishuClient(
-      { ...config, receiveId: "" },
+      { ...config, receiveId: "" } as unknown as FeishuConfiguration,
       join(root, "state"),
       runner(run),
     );
@@ -205,10 +222,13 @@ describe("FeishuClient CLI adapter", () => {
 
     await expect(
       client.send({ type: "text", text: "hello" }, "server-5xx"),
-    ).resolves.toEqual({ status: "unknown", code: "FEISHU_500" });
+    ).resolves.toEqual({ status: "unknown", code: "SEND_FEISHU_500" });
     await expect(
       client.send({ type: "text", text: "hello" }, "malformed"),
-    ).resolves.toEqual({ status: "unknown", code: "MALFORMED_SEND_RESPONSE" });
+    ).resolves.toEqual({
+      status: "unknown",
+      code: "SEND_MALFORMED_RESPONSE",
+    });
     await expect(client.verify()).rejects.toMatchObject({
       code: "FEISHU_AUTH",
     });
@@ -235,12 +255,69 @@ describe("FeishuClient CLI adapter", () => {
       [
         "im",
         "+messages-send",
-        "--user-id",
-        "ou-target",
+        "--chat-id",
+        "oc_dm",
         "--text",
         "hello",
         "--idempotency-key",
         "client-1",
+      ],
+      {},
+    );
+  });
+
+  it("requires a DM chat binding and validates the full target schema", async () => {
+    const run = vi.fn(async () => ({ message_id: "om-never" }));
+    const missingChat = new FeishuClient(
+      { ...config, dmChatId: undefined } as unknown as FeishuConfiguration,
+      join(await stateRoot(), "state"),
+      runner(run),
+    );
+    await expect(
+      missingChat.send({ type: "text", text: "hello" }, "missing-chat"),
+    ).resolves.toEqual({ status: "failed", code: "FEISHU_REBIND_REQUIRED" });
+
+    const legacyConfig = {
+      profile: config.profile,
+      receiveIdType: config.receiveIdType,
+      receiveId: config.receiveId,
+      ownerOpenId: config.ownerOpenId,
+    };
+    const oldDm = new FeishuClient(
+      legacyConfig as FeishuConfiguration,
+      join(await stateRoot(), "state"),
+      runner(run),
+    );
+    await expect(
+      oldDm.send({ type: "text", text: "hello" }, "legacy"),
+    ).resolves.toEqual({ status: "failed", code: "FEISHU_REBIND_REQUIRED" });
+
+    const group = new FeishuClient(
+      {
+        profile: "send-message",
+        receiveIdType: "chat_id",
+        receiveId: "oc_group",
+        ownerOpenId: "ou_owner",
+      },
+      join(await stateRoot(), "state"),
+      runner(run),
+    );
+    await expect(
+      group.send({ type: "text", text: "hello" }, "group"),
+    ).resolves.toEqual({
+      status: "accepted",
+      clientMessageId: "om-never",
+    });
+    expect(run).toHaveBeenCalledWith(
+      [
+        "im",
+        "+messages-send",
+        "--chat-id",
+        "oc_group",
+        "--text",
+        "hello",
+        "--idempotency-key",
+        "group",
       ],
       {},
     );
@@ -261,13 +338,13 @@ describe("FeishuClient CLI adapter", () => {
       client.send({ type: "text", text: "hello" }, "reject"),
     ).resolves.toEqual({
       status: "rejected",
-      code: "FEISHU_230001",
+      code: "SEND_FEISHU_230001",
     });
     await expect(
       client.send({ type: "text", text: "hello" }, "unknown"),
     ).resolves.toEqual({
       status: "unknown",
-      code: "CLI_TIMEOUT",
+      code: "SEND_CLI_TIMEOUT",
     });
     expect(run).toHaveBeenCalledTimes(2);
   });
@@ -282,8 +359,10 @@ describe("FeishuClient CLI adapter", () => {
     await writeFile(source, image);
     let stagedPath = "";
     const run = vi.fn(async (args: string[], options?: { cwd?: string }) => {
-      if (args.includes("--image"))
+      if (args[1] === "images") {
         stagedPath = join(options?.cwd ?? "", "photo.png");
+        return { image_key: "img_photo" };
+      }
       return { message_id: "om-image" };
     });
     const client = new FeishuClient(config, join(root, "state"), runner(run));
@@ -300,16 +379,137 @@ describe("FeishuClient CLI adapter", () => {
     });
     expect(run).toHaveBeenCalledWith(
       expect.arrayContaining([
-        "--image",
-        "./photo.png",
-        "--idempotency-key",
-        "image-1",
+        "im",
+        "images",
+        "create",
+        "--file",
+        "image=./photo.png",
       ]),
       expect.objectContaining({
         cwd: expect.stringContaining("feishu-staging-"),
       }),
     );
+    expect(run).toHaveBeenCalledWith(
+      [
+        "im",
+        "+messages-send",
+        "--chat-id",
+        "oc_dm",
+        "--image",
+        "img_photo",
+        "--idempotency-key",
+        "image-1",
+      ],
+      expect.objectContaining({
+        cwd: expect.stringContaining("feishu-staging-"),
+      }),
+    );
     await expect(stat(stagedPath)).rejects.toThrow();
+  });
+
+  it("uploads a markdown file before submitting its file key", async () => {
+    const root = await stateRoot();
+    const source = join(root, "notes.md");
+    await writeFile(source, "# notes\n");
+    let stagedDirectory = "";
+    const run = vi.fn(async (args: string[], options?: { cwd?: string }) => {
+      stagedDirectory = options?.cwd ?? stagedDirectory;
+      if (args[1] === "files") return { file_key: "file_notes" };
+      return { message_id: "om-file" };
+    });
+    const client = new FeishuClient(config, join(root, "state"), runner(run));
+
+    await expect(
+      client.send(
+        {
+          type: "file",
+          stagedPath: source,
+          fileName: "notes.md",
+          byteLength: 8,
+        },
+        "file-1",
+      ),
+    ).resolves.toEqual({
+      status: "accepted",
+      clientMessageId: "om-file",
+    });
+    expect(run).toHaveBeenNthCalledWith(
+      1,
+      expect.arrayContaining([
+        "im",
+        "files",
+        "create",
+        "--file",
+        "file=./notes.md",
+      ]),
+      expect.objectContaining({
+        cwd: expect.stringContaining("feishu-staging-"),
+      }),
+    );
+    expect(run).toHaveBeenNthCalledWith(
+      2,
+      [
+        "im",
+        "+messages-send",
+        "--chat-id",
+        "oc_dm",
+        "--file",
+        "file_notes",
+        "--idempotency-key",
+        "file-1",
+      ],
+      expect.objectContaining({
+        cwd: expect.stringContaining("feishu-staging-"),
+      }),
+    );
+    await expect(stat(stagedDirectory)).rejects.toThrow();
+  });
+
+  it("does not submit when media upload fails", async () => {
+    const root = await stateRoot();
+    const source = join(root, "notes.md");
+    await writeFile(source, "# notes\n");
+    const run = vi
+      .fn<FeishuCliRunner["run"]>()
+      .mockRejectedValue(new FeishuCliError("CLI_TIMEOUT"));
+    const client = new FeishuClient(config, join(root, "state"), runner(run));
+
+    await expect(
+      client.send(
+        {
+          type: "file",
+          stagedPath: source,
+          fileName: "notes.md",
+          byteLength: 8,
+        },
+        "upload-fails",
+      ),
+    ).resolves.toEqual({ status: "failed", code: "UPLOAD_CLI_TIMEOUT" });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a submission timeout unknown without automatically repeating it", async () => {
+    const root = await stateRoot();
+    const source = join(root, "notes.md");
+    await writeFile(source, "# notes\n");
+    const run = vi
+      .fn<FeishuCliRunner["run"]>()
+      .mockResolvedValueOnce({ file_key: "file_notes" })
+      .mockRejectedValueOnce(new FeishuCliError("CLI_TIMEOUT"));
+    const client = new FeishuClient(config, join(root, "state"), runner(run));
+
+    await expect(
+      client.send(
+        {
+          type: "file",
+          stagedPath: source,
+          fileName: "notes.md",
+          byteLength: 8,
+        },
+        "submit-unknown",
+      ),
+    ).resolves.toEqual({ status: "unknown", code: "SEND_CLI_TIMEOUT" });
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("filters owner and target before reading raw media content", async () => {
@@ -341,7 +541,12 @@ describe("FeishuClient CLI adapter", () => {
     } as FeishuCliRunner;
     const callback = vi.fn();
     const client = new FeishuClient(
-      { ...config, receiveIdType: "chat_id", receiveId: "oc-group" },
+      {
+        profile: "send-message",
+        receiveIdType: "chat_id",
+        receiveId: "oc_group",
+        ownerOpenId: "ou_owner",
+      },
       join(await stateRoot(), "state"),
       cli,
     );
@@ -349,9 +554,9 @@ describe("FeishuClient CLI adapter", () => {
     await handler?.({
       type: "im.message.receive_v1",
       sender_type: "user",
-      sender_id: "ou-other",
+      sender_id: "ou_other",
       chat_type: "group",
-      chat_id: "oc-group",
+      chat_id: "oc_group",
       message_id: "om_ignore",
       message_type: "file",
     });
@@ -359,9 +564,9 @@ describe("FeishuClient CLI adapter", () => {
     await handler?.({
       type: "im.message.receive_v1",
       sender_type: "user",
-      sender_id: "ou-owner",
+      sender_id: "ou_owner",
       chat_type: "group",
-      chat_id: "oc-group",
+      chat_id: "oc_group",
       message_id: "om_file",
       message_type: "file",
       create_time: "10",
@@ -407,8 +612,9 @@ describe("FeishuClient CLI adapter", () => {
       {
         type: "im.message.receive_v1",
         sender_type: "bot",
-        sender_id: "ou-owner",
+        sender_id: "ou_owner",
         chat_type: "p2p",
+        chat_id: "oc_dm",
         message_id: "om-bot",
         message_type: "text",
         content: "ignore",
@@ -416,8 +622,9 @@ describe("FeishuClient CLI adapter", () => {
       {
         type: "im.message.receive_v1",
         sender_type: "user",
-        sender_id: "ou-other",
+        sender_id: "ou_other",
         chat_type: "p2p",
+        chat_id: "oc_dm",
         message_id: "om-owner",
         message_type: "text",
         content: "ignore",
@@ -425,8 +632,9 @@ describe("FeishuClient CLI adapter", () => {
       {
         type: "im.message.receive_v1",
         sender_type: "user",
-        sender_id: "ou-owner",
+        sender_id: "ou_owner",
         chat_type: "group",
+        chat_id: "oc_other",
         message_id: "om-group",
         message_type: "text",
         content: "ignore",
@@ -434,8 +642,9 @@ describe("FeishuClient CLI adapter", () => {
       {
         type: "im.message.receive_v1",
         sender_type: "user",
-        sender_id: "ou-owner",
+        sender_id: "ou_owner",
         chat_type: "p2p",
+        chat_id: "oc_dm",
         message_id: "message-without-prefix",
         message_type: "text",
         content: "ignore",
@@ -443,16 +652,18 @@ describe("FeishuClient CLI adapter", () => {
       {
         type: "im.message.receive_v1",
         sender_type: "user",
-        sender_id: "ou-owner",
+        sender_id: "ou_owner",
         chat_type: "p2p",
+        chat_id: "oc_dm",
         message_id: "om-sticker",
         message_type: "sticker",
       },
       {
         type: "im.message.receive_v1",
         sender_type: "user",
-        sender_id: "ou-owner",
+        sender_id: "ou_owner",
         chat_type: "p2p",
+        chat_id: "oc_dm",
         message_id: "om-no-content",
         message_type: "text",
       },
@@ -464,8 +675,9 @@ describe("FeishuClient CLI adapter", () => {
     await handler?.({
       type: "im.message.receive_v1",
       sender_type: "user",
-      sender_id: "ou-owner",
+      sender_id: "ou_owner",
       chat_type: "p2p",
+      chat_id: "oc_dm",
       message_id: "om_valid",
       message_type: "text",
       content: "accepted",
@@ -511,8 +723,9 @@ describe("FeishuClient CLI adapter", () => {
     const event = {
       type: "im.message.receive_v1",
       sender_type: "user",
-      sender_id: "ou-owner",
+      sender_id: "ou_owner",
       chat_type: "p2p",
+      chat_id: "oc_dm",
       message_id: "om_file",
       message_type: "file",
       create_time: "10",
@@ -530,6 +743,73 @@ describe("FeishuClient CLI adapter", () => {
       receivedAt: 10,
       attachments: [{ type: "image", key: "img-1", fileName: "image" }],
     });
+  });
+
+  it("exposes safe inbound filter and processing diagnostics", async () => {
+    let handler: ((event: unknown) => Promise<void>) | undefined;
+    const cli = {
+      ...runner(vi.fn(async () => undefined)),
+      subscribe: async (callback: (event: unknown) => Promise<void>) => {
+        handler = callback;
+        return { close: vi.fn(), isOpen: () => true };
+      },
+    } as FeishuCliRunner;
+    const client = new FeishuClient(
+      config,
+      join(await stateRoot(), "state"),
+      cli,
+    );
+    await client.startReceiving(vi.fn());
+
+    await handler?.({
+      type: "im.message.receive_v1",
+      sender_type: "user",
+      sender_id: "ou_owner",
+      chat_type: "p2p",
+      chat_id: "oc_wrong",
+      message_id: "om_wrong_chat",
+      message_type: "text",
+      content: "ignored",
+    });
+    expect(client.getInboundDiagnostics()).toMatchObject({
+      lastFilterReason: "CHAT_MISMATCH",
+      lastInboundError: null,
+    });
+    expect(client.getInboundDiagnostics().lastEventAt).toEqual(
+      expect.any(String),
+    );
+
+    const callback = vi.fn().mockRejectedValue(new Error("secret body"));
+    const failingClient = new FeishuClient(
+      config,
+      join(await stateRoot(), "state"),
+      {
+        ...runner(vi.fn(async () => undefined)),
+        subscribe: async (next: (event: unknown) => Promise<void>) => {
+          handler = next;
+          return { close: vi.fn(), isOpen: () => true };
+        },
+      } as FeishuCliRunner,
+    );
+    await failingClient.startReceiving(callback);
+    await expect(
+      handler?.({
+        type: "im.message.receive_v1",
+        sender_type: "user",
+        sender_id: "ou_owner",
+        chat_type: "p2p",
+        chat_id: "oc_dm",
+        message_id: "om_callback_error",
+        message_type: "text",
+        content: "secret body",
+      }),
+    ).rejects.toThrow("INBOUND_PROCESSING_FAILED");
+    expect(failingClient.getInboundDiagnostics()).toMatchObject({
+      lastInboundError: "INBOUND_PROCESSING_FAILED",
+    });
+    expect(JSON.stringify(failingClient.getInboundDiagnostics())).not.toContain(
+      "secret",
+    );
   });
 
   it("downloads through a private temporary path and refuses overwrite", async () => {

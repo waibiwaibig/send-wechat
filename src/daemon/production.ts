@@ -4,7 +4,8 @@ import {
   FeishuConfigurationStore,
 } from "../messaging/config.js";
 import { ChannelRouter } from "../messaging/channel-router.js";
-import { FeishuClient, type FeishuInboundMessage } from "../feishu/client.js";
+import { FeishuClient } from "../feishu/client.js";
+import { FeishuReceiver } from "../feishu/receiver.js";
 import { FeishuRuntime } from "../feishu/runtime.js";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
@@ -139,6 +140,10 @@ export async function startProductionDaemon(
   const feishuInbox = new SqliteTextInbox(
     join(paths.stateDir, "feishu-inbox.sqlite"),
   );
+  const feishuReceiver =
+    feishu === null
+      ? null
+      : new FeishuReceiver(feishu, feishuInbox, attachments);
   const channels = new ChannelRouter({
     defaultChannel: configuration.defaultChannel,
     providers: {
@@ -151,6 +156,15 @@ export async function startProductionDaemon(
               new SqliteIdempotencyStore(
                 join(paths.stateDir, "feishu-idempotency.sqlite"),
               ),
+              () => {
+                const inbound = feishu.getInboundDiagnostics();
+                return {
+                  ...feishuReceiver!.diagnostics(),
+                  lastEventAt: inbound.lastEventAt,
+                  lastFilterReason: inbound.lastFilterReason,
+                  lastProcessingError: inbound.lastInboundError,
+                };
+              },
             ),
           }),
     },
@@ -224,70 +238,10 @@ export async function startProductionDaemon(
   });
   const abort = new AbortController();
   await server.start();
-  let incomingTail = Promise.resolve();
-  let incomingCount = 0;
-  const receiveFeishu = (message: FeishuInboundMessage): void => {
-    if (feishu === null) return;
-    if (!feishuInbox.isActive() || incomingCount >= 100) return;
-    incomingCount++;
-    incomingTail = incomingTail
-      .then(async () => {
-        if (!feishuInbox.isActive()) return;
-        const resources = [];
-        let text = message.text;
-        for (const attachment of message.attachments.slice(0, 10)) {
-          try {
-            const path = await attachments.save(
-              attachment.fileName,
-              (destination) =>
-                feishu.downloadResource(
-                  message.id,
-                  attachment.key,
-                  attachment.type,
-                  destination,
-                ),
-            );
-            resources.push({
-              type: attachment.type,
-              path,
-              fileName: attachment.fileName,
-            });
-          } catch {
-            text += "\n[附件下载失败，请重新发送该附件。]";
-          }
-        }
-        feishuInbox.append([
-          {
-            id: message.id,
-            text,
-            receivedAt: message.receivedAt,
-            attachments: resources,
-          },
-        ]);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        incomingCount--;
-      });
-  };
-  let receiving = false;
   let receiverTask = Promise.resolve();
   const receiverTimer = setInterval(() => {
-    receiverTask = receiverTask
-      .then(async () => {
-        if (feishu === null || abort.signal.aborted) return;
-        const active = feishuInbox.isActive();
-        if (active && (!receiving || !feishu.isReceiving())) {
-          await feishu.startReceiving(receiveFeishu);
-          receiving = true;
-        } else if (!active && receiving) {
-          feishu.close();
-          receiving = false;
-        }
-      })
-      .catch(() => {
-        receiving = false;
-      });
+    if (!abort.signal.aborted && feishuReceiver !== null)
+      receiverTask = feishuReceiver.tick().catch(() => undefined);
   }, 1000);
   receiverTimer.unref();
   const pollingTask = configuration.channels.includes("wechat")
@@ -349,8 +303,7 @@ export async function startProductionDaemon(
       abort.abort();
       clearInterval(receiverTimer);
       await receiverTask;
-      feishu?.close();
-      await incomingTail;
+      await feishuReceiver?.close();
       feishuInbox.close();
       await relayConnector?.stop();
       await relayUploads?.close();

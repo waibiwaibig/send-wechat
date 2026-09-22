@@ -24,6 +24,20 @@ Only bound-owner messages reach the secretary. Subscription startup waits for th
 marker and keeps stdin open. Child process failures must not masquerade as delivery.
 Unknown send outcomes remain terminal in the existing ledger.
 
+DM bindings retain the challenge event's private chat ID as well as the owner open ID.
+All outgoing messages address that verified chat; incoming DMs require both the owner
+and that same private chat. Existing DM configurations without a chat ID require an
+explicit rebind. A failed rebind leaves the previous configuration intact.
+
+Media delivery uses the CLI's typed image/file upload commands followed by message
+submission with the returned resource key. Generic file attachments use `stream`,
+including Markdown files. Each stage has its own bounded timeout and safe error code.
+Upload failure cannot submit a message; ambiguous message submission stays terminal.
+The ledger retains the safe cause and outcome category across daemon restarts.
+Status reports configuration readiness separately from observed listener, inbox and
+send health. Observation timestamps are process-local; the persistent ledger remains
+the source for a particular idempotency key's outcome.
+
 ## Consequences
 
 An extra native binary is downloaded during dependency installation. Its exact version
@@ -44,3 +58,8 @@ or clean WSL service/restart acceptance.
 - [CLI quick start and authentication](https://github.com/larksuite/cli/blob/main/README.zh.md)
 - [Message sending parameters and identity](https://github.com/larksuite/cli/blob/main/skills/lark-im/references/lark-im-messages-send.md)
 - [Event subprocess contract](https://github.com/larksuite/cli/blob/main/skills/lark-event/SKILL.md)
+- Pinned v1.0.96: [media resolution before message submission](https://github.com/larksuite/cli/blob/v1.0.96/shortcuts/im/im_messages_send.go#L213-L263),
+  [generic file type selection](https://github.com/larksuite/cli/blob/v1.0.96/shortcuts/im/helpers.go#L1251-L1273),
+  and [successful API payload extraction](https://github.com/larksuite/cli/blob/v1.0.96/internal/output/envelope_success.go#L17-L49).
+  Local binary contracts are checked using `event consume --help`, `im files create --help`,
+  `im images create --help`, and the corresponding `schema` commands; these perform no delivery.

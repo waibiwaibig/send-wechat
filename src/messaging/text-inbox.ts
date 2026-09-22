@@ -50,6 +50,15 @@ export type TextInboxPollResult = {
   overflow: boolean;
 };
 
+export type TextInboxAppendSummary = {
+  accepted: number;
+  rejected: number;
+  duplicates: number;
+  expired: number;
+  overflow: number;
+  inactive: number;
+};
+
 export class TextInboxError extends Error {
   public constructor(
     public readonly code: string,
@@ -170,14 +179,25 @@ export class SqliteTextInbox {
     });
   }
 
-  public append(messages: InboundText[]): void {
+  public append(messages: InboundText[]): TextInboxAppendSummary {
     if (!Array.isArray(messages))
       throw new TextInboxError("INBOX_APPEND_INVALID");
     const validMessages = messages.filter(isValidMessage);
-    if (validMessages.length === 0) return;
+    const summary: TextInboxAppendSummary = {
+      accepted: 0,
+      rejected: messages.length - validMessages.length,
+      duplicates: 0,
+      expired: 0,
+      overflow: 0,
+      inactive: 0,
+    };
+    if (validMessages.length === 0) return summary;
 
     const database = this.openDatabase(false);
-    if (database === null) return;
+    if (database === null) {
+      summary.inactive = validMessages.length;
+      return summary;
+    }
     this.transaction(database, () => {
       const now = this.currentTime();
       this.prune(database, now);
@@ -187,6 +207,7 @@ export class SqliteTextInbox {
         metadata.lease_until === null ||
         metadata.lease_until <= now
       ) {
+        summary.inactive = validMessages.length;
         return;
       }
 
@@ -210,16 +231,20 @@ export class SqliteTextInbox {
          ON CONFLICT(id) DO NOTHING`,
       );
       for (const message of validMessages) {
+        const seen = seenInsert.run(message.id, now);
+        if (Number(seen.changes) !== 1) {
+          summary.duplicates += 1;
+          continue;
+        }
         if (message.receivedAt < cutoff) {
           // Retain no body for an expired upstream replay. The seen record is
           // still useful for suppressing that replay during the TTL window.
-          seenInsert.run(message.id, now);
+          summary.expired += 1;
           continue;
         }
-        const seen = seenInsert.run(message.id, now);
-        if (Number(seen.changes) !== 1) continue;
         if (available <= 0) {
           overflow = true;
+          summary.overflow += 1;
           continue;
         }
         const inserted = messageInsert.run(
@@ -228,7 +253,10 @@ export class SqliteTextInbox {
           JSON.stringify(message.attachments ?? []),
           message.receivedAt,
         );
-        if (Number(inserted.changes) === 1) available -= 1;
+        if (Number(inserted.changes) === 1) {
+          available -= 1;
+          summary.accepted += 1;
+        }
       }
       if (overflow !== (metadata.overflow === 1)) {
         database
@@ -236,6 +264,7 @@ export class SqliteTextInbox {
           .run(overflow ? 1 : 0, SCHEMA_VERSION);
       }
     });
+    return summary;
   }
 
   /** Check for a live lease without creating the inbox database. */
@@ -483,7 +512,6 @@ function isValidMessage(value: InboundText): value is InboundText {
   const validAttachments =
     attachments === undefined ||
     (Array.isArray(attachments) &&
-      attachments.length > 0 &&
       attachments.length <= MAX_ATTACHMENTS &&
       attachments.every(isValidAttachment));
   const text = value?.text;

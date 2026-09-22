@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   MessageConfigStore,
+  FeishuConfigurationStore,
   feishuConfigurationSchema,
   messageConfigSchema,
 } from "../src/messaging/config.js";
@@ -27,6 +28,7 @@ function validFeishu(
     receiveIdType: "open_id",
     receiveId: "ou_owner123",
     ownerOpenId: "ou_owner123",
+    dmChatId: "oc_chat123",
     ...overrides,
   };
 }
@@ -69,20 +71,78 @@ describe("message configuration schemas", () => {
     expect(feishuConfigurationSchema.parse(validFeishu())).toMatchObject({
       receiveIdType: "open_id",
       receiveId: "ou_owner123",
+      dmChatId: "oc_chat123",
     });
+    expect(() =>
+      feishuConfigurationSchema.parse(
+        validFeishu({ dmChatId: undefined } as Partial<FeishuConfiguration>),
+      ),
+    ).toThrow();
+    expect(() =>
+      feishuConfigurationSchema.parse(
+        validFeishu({ dmChatId: "ou_not_a_chat" }),
+      ),
+    ).toThrow();
   });
 
   it("accepts only the Feishu group chat id format for group delivery", () => {
     expect(
-      feishuConfigurationSchema.parse(
-        validFeishu({ receiveIdType: "chat_id", receiveId: "oc_group123" }),
-      ),
+      feishuConfigurationSchema.parse({
+        profile: "send-message",
+        receiveIdType: "chat_id",
+        receiveId: "oc_group123",
+        ownerOpenId: "ou_owner123",
+      }),
     ).toMatchObject({ receiveIdType: "chat_id", receiveId: "oc_group123" });
     expect(() =>
-      feishuConfigurationSchema.parse(
-        validFeishu({ receiveIdType: "chat_id", receiveId: "ou_owner123" }),
-      ),
+      feishuConfigurationSchema.parse({
+        profile: "send-message",
+        receiveIdType: "chat_id",
+        receiveId: "oc_group123",
+        ownerOpenId: "ou_owner123",
+        dmChatId: "oc_dm123",
+      } as unknown),
     ).toThrow();
+    expect(() =>
+      feishuConfigurationSchema.parse({
+        profile: "send-message",
+        receiveIdType: "chat_id",
+        receiveId: "ou_owner123",
+        ownerOpenId: "ou_owner123",
+      }),
+    ).toThrow();
+  });
+
+  it("round-trips a DM binding with its validated chat id", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "send-message-feishu-"));
+    roots.push(root);
+    const store = new FeishuConfigurationStore(root);
+    const config = validFeishu();
+
+    await store.save(config);
+
+    await expect(store.load()).resolves.toEqual(config);
+  });
+
+  it("requires an explicit rebind for an old DM config without dmChatId", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "send-message-feishu-"));
+    roots.push(root);
+    await writeFile(
+      path.join(root, "feishu.json"),
+      JSON.stringify({
+        profile: "send-message",
+        receiveIdType: "open_id",
+        receiveId: "ou_owner123",
+        ownerOpenId: "ou_owner123",
+      }),
+      { mode: 0o600 },
+    );
+
+    await expect(
+      new FeishuConfigurationStore(root).load(),
+    ).rejects.toMatchObject({
+      code: "FEISHU_REBIND_REQUIRED",
+    });
   });
 });
 

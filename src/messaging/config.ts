@@ -42,21 +42,57 @@ export class MessageConfigStore {
   }
 }
 
-export const feishuConfigurationSchema = z
+const feishuDmConfigurationSchema = z
   .strictObject({
     profile: z.literal("send-message"),
-    receiveIdType: z.enum(["open_id", "chat_id"]),
+    receiveIdType: z.literal("open_id"),
+    receiveId: z.string().min(1).max(256),
+    ownerOpenId: z
+      .string()
+      .regex(/^ou_[A-Za-z0-9_-]+$/)
+      .max(256),
+    dmChatId: z
+      .string()
+      .regex(/^oc_[A-Za-z0-9_-]+$/)
+      .max(256),
+  })
+  .refine((value) => value.receiveId === value.ownerOpenId);
+
+const feishuGroupConfigurationSchema = z.strictObject({
+  profile: z.literal("send-message"),
+  receiveIdType: z.literal("chat_id"),
+  receiveId: z
+    .string()
+    .regex(/^oc_[A-Za-z0-9_-]+$/)
+    .max(256),
+  ownerOpenId: z
+    .string()
+    .regex(/^ou_[A-Za-z0-9_-]+$/)
+    .max(256),
+});
+
+export const feishuConfigurationSchema = z.discriminatedUnion("receiveIdType", [
+  feishuDmConfigurationSchema,
+  feishuGroupConfigurationSchema,
+]);
+
+const legacyFeishuDmConfigurationSchema = z
+  .strictObject({
+    profile: z.literal("send-message"),
+    receiveIdType: z.literal("open_id"),
     receiveId: z.string().min(1).max(256),
     ownerOpenId: z
       .string()
       .regex(/^ou_[A-Za-z0-9_-]+$/)
       .max(256),
   })
-  .refine((value) =>
-    value.receiveIdType === "open_id"
-      ? value.receiveId === value.ownerOpenId
-      : /^oc_[A-Za-z0-9_-]+$/.test(value.receiveId),
-  );
+  .refine((value) => value.receiveId === value.ownerOpenId);
+
+function rebindRequired(): Error & { code: string } {
+  return Object.assign(new Error("FEISHU_REBIND_REQUIRED"), {
+    code: "FEISHU_REBIND_REQUIRED",
+  });
+}
 export type FeishuConfiguration = z.infer<typeof feishuConfigurationSchema>;
 
 export class FeishuConfigurationStore {
@@ -64,8 +100,18 @@ export class FeishuConfigurationStore {
   constructor(stateDir: string) {
     this.path = join(stateDir, "feishu.json");
   }
-  load(): Promise<FeishuConfiguration | null> {
-    return readPrivateJson(this.path, feishuConfigurationSchema);
+  async load(): Promise<FeishuConfiguration | null> {
+    const value = await readPrivateJson(
+      this.path,
+      z.union([feishuConfigurationSchema, legacyFeishuDmConfigurationSchema]),
+    );
+    if (
+      value !== null &&
+      value.receiveIdType === "open_id" &&
+      !("dmChatId" in value)
+    )
+      throw rebindRequired();
+    return value;
   }
   save(value: FeishuConfiguration): Promise<void> {
     return writePrivateJson(this.path, feishuConfigurationSchema, value);

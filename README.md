@@ -46,6 +46,10 @@ Codex 可使用 `~/.agents/skills/send-message/`，Claude Code 使用
 双渠道使用 `--channels both --default-channel wechat|feishu`。
 飞书默认绑定自己的私聊；指定通知群时加 `--feishu-target group`。
 更换目标使用 `setup --feishu-rebind`，按新绑定码确认。完整步骤见 [飞书指南](.agents/skills/send-message/feishu.md)。
+
+私聊绑定同时保存本人身份和该私聊的 `chat_id`。升级后若提示
+`FEISHU_REBIND_REQUIRED`，运行 `send-message setup --channels feishu --feishu-target dm --feishu-rebind`，
+在原机器人私聊发送新绑定码。只有新绑定成功才会替换原配置。
 已有自定义 Webhook 需要改为应用机器人，才能使用本工具的文件发送和双向秘书能力。
 
 单台电脑直接使用本地服务，不需要 Cloudflare。多台电脑共用一个常在线 Hub 时，
@@ -75,6 +79,14 @@ send-message doctor
 
 微信与飞书分别维护限制、凭据和账本。[微信指南](.agents/skills/send-message/wechat.md)
 解释会话续期及 `/recover`；飞书按应用 API 的权限和配额处理。
+
+飞书 `status` 的 `ready` 表示 Hub 已加载绑定配置。`diagnostics` 分别显示监听状态、
+最近事件、最近入站/入箱时间及最近发送结果；这些观测在 Hub 重启后重新开始。
+秘书未启用时监听为 `inactive`。秘书的模型处理和会话状态使用
+`send-message-gateway --channel feishu --json status` 查看。
+发送失败的 `error.causeCode` 保留安全的具体原因：`UPLOAD_` 表示上传阶段，
+`SEND_` 表示消息提交阶段，`STAGED_` 表示本地暂存阶段。
+`accepted` 表示平台接受；文件是否收到仍需在目标会话确认。未知结果不会自动重发。
 
 ## 可选 Codex 功能
 

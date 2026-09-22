@@ -83,6 +83,55 @@ describe("SQLite text inbox", () => {
     inbox.close();
   });
 
+  it("summarizes accepted, invalid, duplicate, expired, overflow, and inactive messages", async () => {
+    const paths = await fixture();
+    const now = Date.parse("2026-09-08T00:00:00.000Z");
+    const inbox = new SqliteTextInbox(paths.path, { now: () => now });
+
+    expect(inbox.append([message("inactive", now)])).toEqual({
+      accepted: 0,
+      rejected: 0,
+      duplicates: 0,
+      expired: 0,
+      overflow: 0,
+      inactive: 1,
+    });
+    inbox.poll("consumer");
+    expect(
+      inbox.append([
+        message("accepted", now),
+        message("accepted", now, "duplicate"),
+        message("", now),
+        message("expired", now - 24 * 60 * 60 * 1000 - 1),
+      ]),
+    ).toEqual({
+      accepted: 1,
+      rejected: 1,
+      duplicates: 1,
+      expired: 1,
+      overflow: 0,
+      inactive: 0,
+    });
+    expect(inbox.append([message("accepted", now)])).toEqual({
+      accepted: 0,
+      rejected: 0,
+      duplicates: 1,
+      expired: 0,
+      overflow: 0,
+      inactive: 0,
+    });
+
+    const overflow = Array.from({ length: 500 }, (_, index) =>
+      message(`overflow-${index}`, now),
+    );
+    expect(inbox.append(overflow)).toMatchObject({
+      accepted: 499,
+      overflow: 1,
+      inactive: 0,
+    });
+    inbox.close();
+  });
+
   it("enforces one lease, retains unacknowledged messages, and reports overflow", async () => {
     const paths = await fixture();
     let now = Date.parse("2026-09-08T00:00:00.000Z");
@@ -124,6 +173,39 @@ describe("SQLite text inbox", () => {
 
     now += 24 * 60 * 60 * 1000 + 1;
     expect(inbox.poll("consumer").messages).toEqual([]);
+    inbox.close();
+  });
+
+  it("accepts nonempty text with an explicit empty attachment list", async () => {
+    const paths = await fixture();
+    const now = Date.parse("2026-09-08T00:00:00.000Z");
+    const inbox = new SqliteTextInbox(paths.path, { now: () => now });
+    inbox.poll("consumer");
+
+    inbox.append([
+      {
+        id: "text-without-attachments",
+        text: "1",
+        receivedAt: now,
+        attachments: [],
+      },
+      {
+        id: "empty-without-attachments",
+        text: "",
+        receivedAt: now,
+        attachments: [],
+      },
+      {
+        id: "invalid-attachment",
+        text: "1",
+        receivedAt: now,
+        attachments: [{ type: "file", path: "relative.txt", fileName: "x" }],
+      },
+    ]);
+
+    expect(inbox.poll("consumer").messages).toEqual([
+      message("text-without-attachments", now, "1"),
+    ]);
     inbox.close();
   });
 

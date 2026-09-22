@@ -51,6 +51,7 @@ export type RuntimeSuccess = {
     lastInboundAt: string | null;
     renewalDueAt: string | null;
     expiresAt: string | null;
+    diagnostics?: Record<string, unknown>;
   };
 };
 

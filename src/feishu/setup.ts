@@ -40,7 +40,17 @@ export async function setupFeishu(
 ): Promise<FeishuConfiguration> {
   const cli = dependencies.cli ?? new FeishuCli(stateDir);
   const store = dependencies.store ?? new FeishuConfigurationStore(stateDir);
-  const existing = await store.load();
+  let existing: FeishuConfiguration | null;
+  try {
+    existing = await store.load();
+  } catch (error) {
+    const code =
+      error !== null && typeof error === "object"
+        ? (error as { code?: unknown }).code
+        : undefined;
+    if (!options.rebind || code !== "FEISHU_REBIND_REQUIRED") throw error;
+    existing = null;
+  }
   if (existing !== null && !options.rebind) {
     if (
       options.target !== undefined &&
@@ -120,6 +130,7 @@ export async function setupFeishu(
         receiveIdType: target === "dm" ? "open_id" : "chat_id",
         receiveId: target === "dm" ? event.sender_id : event.chat_id,
         ownerOpenId: event.sender_id,
+        ...(target === "dm" ? { dmChatId: event.chat_id } : {}),
       });
       if (!parsed.success) return;
       done = true;

@@ -63,6 +63,20 @@ type Spawned = {
 const roots: string[] = [];
 const savedEnvironment = new Map<string, string | undefined>();
 const realSetImmediate = setImmediate;
+const realSetTimeout = setTimeout;
+const realClearTimeout = clearTimeout;
+
+type SpawnWaiter = {
+  resolve: (record: Spawned) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+type SpawnHarnessState = {
+  waiters: Map<number, Set<SpawnWaiter>>;
+};
+
+const spawnHarnessStates = new WeakMap<Spawned[], SpawnHarnessState>();
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -79,10 +93,21 @@ afterEach(async () => {
 
 function spawnHarness(): Spawned[] {
   const spawned: Spawned[] = [];
+  const state: SpawnHarnessState = { waiters: new Map() };
+  spawnHarnessStates.set(spawned, state);
   childProcessMock.spawn.mockImplementation(
     (file: string, args: string[], options: SpawnOptions) => {
       const child = new FakeChild();
-      spawned.push({ file, args, options, child });
+      const record = { file, args, options, child };
+      const index = spawned.push(record) - 1;
+      const waiters = state.waiters.get(index);
+      if (waiters !== undefined) {
+        state.waiters.delete(index);
+        for (const waiter of waiters) {
+          realClearTimeout(waiter.timer);
+          waiter.resolve(record);
+        }
+      }
       return child;
     },
   );
@@ -90,12 +115,31 @@ function spawnHarness(): Spawned[] {
 }
 
 async function waitForSpawn(spawned: Spawned[], index = 0): Promise<Spawned> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const processRecord = spawned[index];
-    if (processRecord !== undefined) return processRecord;
-    await new Promise<void>((resolve) => realSetImmediate(resolve));
-  }
-  throw new Error("fake child was not spawned");
+  const processRecord = spawned[index];
+  if (processRecord !== undefined) return processRecord;
+  const state = spawnHarnessStates.get(spawned);
+  if (state === undefined) throw new Error("unknown spawn harness");
+  return new Promise<Spawned>((resolve, reject) => {
+    const waiters = state.waiters.get(index) ?? new Set<SpawnWaiter>();
+    const waiter = {
+      resolve: (record: Spawned) => {
+        waiters.delete(waiter);
+        resolve(record);
+      },
+      reject: (error: Error) => {
+        waiters.delete(waiter);
+        reject(error);
+      },
+      timer: undefined as unknown as ReturnType<typeof setTimeout>,
+    } satisfies SpawnWaiter;
+    waiter.timer = realSetTimeout(() => {
+      waiters.delete(waiter);
+      if (waiters.size === 0) state.waiters.delete(index);
+      waiter.reject(new Error("fake child was not spawned"));
+    }, 2_000);
+    waiters.add(waiter);
+    state.waiters.set(index, waiters);
+  });
 }
 
 async function makeCli(): Promise<{ cli: FeishuCli; stateDir: string }> {
@@ -382,8 +426,6 @@ describe("FeishuCli subprocess boundary", () => {
       "send-message",
       "--as",
       "bot",
-      "--format",
-      "json",
     ]);
     expect(processRecord.child.stdin.writable).toBe(true);
     subscription.close();
@@ -419,6 +461,49 @@ describe("FeishuCli subprocess boundary", () => {
 
     await expect(subscribing).rejects.toMatchObject({ code: "CLI_NOT_FOUND" });
     expect(processRecord.child.killCalls).toEqual(["SIGTERM"]);
+  });
+
+  it("preserves structured startup errors from stdout and stderr without secrets", async () => {
+    const spawned = spawnHarness();
+    const { cli } = await makeCli();
+    const failure = JSON.stringify({
+      ok: false,
+      error: {
+        type: "validation",
+        subtype: "invalid_argument",
+        message: "app_secret must not escape",
+      },
+    });
+
+    const stderrCallback = vi.fn();
+    const stderrSubscription = cli.subscribe(stderrCallback);
+    const stderrProcess = await waitForSpawn(spawned);
+    stderrProcess.child.stderr.write(`${failure}\n`);
+    stderrProcess.child.finish(2);
+    const stderrError = await stderrSubscription.catch(
+      (error: unknown) => error,
+    );
+    expect(stderrError).toMatchObject({
+      code: "CLI_INVALID_ARGUMENT",
+      exitCode: 2,
+    });
+    expect(String(stderrError)).not.toContain("app_secret");
+    expect(stderrCallback).not.toHaveBeenCalled();
+
+    const stdoutCallback = vi.fn();
+    const stdoutSubscription = cli.subscribe(stdoutCallback);
+    const stdoutProcess = await waitForSpawn(spawned, 1);
+    stdoutProcess.child.stdout.write(`${failure}\n`);
+    stdoutProcess.child.finish(2);
+    const stdoutError = await stdoutSubscription.catch(
+      (error: unknown) => error,
+    );
+    expect(stdoutError).toMatchObject({
+      code: "CLI_INVALID_ARGUMENT",
+      exitCode: 2,
+    });
+    expect(String(stdoutError)).not.toContain("app_secret");
+    expect(stdoutCallback).not.toHaveBeenCalled();
   });
 
   it("times out startup with fake time and closes the child", async () => {

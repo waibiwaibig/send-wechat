@@ -25,6 +25,50 @@ const command = {
   idempotencyKey: "same",
   text: "hello",
 };
+it("reports observed listener health and the actual send outcome without probing or resending", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "feishu-health-"));
+  directories.push(dir);
+  const send = vi.fn<FeishuClient["send"]>().mockResolvedValue({
+    status: "unknown",
+    code: "SEND_CLI_TIMEOUT",
+  });
+  const observation = {
+    listener: "failed" as const,
+    lastListenerError: "CLI_INVALID_ARGUMENT",
+    lastInboundAt: "2026-09-22T00:00:00.000Z",
+    lastEnqueuedAt: null,
+    lastInboundError: "INBOX_WRITE_FAILED",
+  };
+  const app = new FeishuRuntime(
+    { send },
+    new SqliteIdempotencyStore(join(dir, "ledger.sqlite")),
+    () => observation,
+  );
+  await expect(
+    app.execute({ type: "status", requestId: "status" }),
+  ).resolves.toMatchObject({
+    result: {
+      lastInboundAt: observation.lastInboundAt,
+      diagnostics: { readiness: "configured", ...observation, lastSend: null },
+    },
+  });
+  expect(send).not.toHaveBeenCalled();
+  await app.execute(command);
+  await expect(
+    app.execute({ type: "status", requestId: "status" }),
+  ).resolves.toMatchObject({
+    result: {
+      diagnostics: {
+        lastSend: {
+          status: "unknown",
+          code: "SEND_CLI_TIMEOUT",
+          at: expect.any(String),
+        },
+      },
+    },
+  });
+  expect(send).toHaveBeenCalledTimes(1);
+});
 it("deduplicates accepted sends and rejects changed payloads", async () => {
   const send = vi
     .fn<FeishuClient["send"]>()
@@ -76,3 +120,81 @@ it.each(["failed", "rejected"] as const)(
     expect(send).toHaveBeenCalledTimes(1);
   },
 );
+
+it.each([
+  ["rejected", "FEISHU_230101", "SERVER_REJECTED"],
+  ["failed", "UPLOAD_CLI_TIMEOUT", "PRE_SEND_FAILED"],
+  ["unknown", "SEND_CLI_TIMEOUT", "RESULT_UNKNOWN"],
+] as const)(
+  "preserves the %s provider code on first and duplicate responses",
+  async (status, providerCode, semanticCode) => {
+    const send = vi
+      .fn<FeishuClient["send"]>()
+      .mockResolvedValue({ status, code: providerCode });
+    const app = await runtime(send);
+
+    expect(await app.execute(command)).toMatchObject({
+      error: {
+        code: semanticCode,
+        causeCode: providerCode,
+        retryable: false,
+      },
+    });
+    expect(await app.execute(command)).toMatchObject({
+      error: {
+        code: semanticCode,
+        causeCode: providerCode,
+        retryable: false,
+      },
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("decodes a typed result after reopening the persisted ledger", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "send-message-feishu-"));
+  directories.push(dir);
+  const ledgerPath = join(dir, "ledger.sqlite");
+  const send = vi
+    .fn<FeishuClient["send"]>()
+    .mockResolvedValue({ status: "rejected", code: "FEISHU_230101" });
+  const firstRuntime = new FeishuRuntime(
+    { send },
+    new SqliteIdempotencyStore(ledgerPath),
+  );
+  await firstRuntime.execute(command);
+
+  const reopenedRuntime = new FeishuRuntime(
+    { send: vi.fn<FeishuClient["send"]>() },
+    new SqliteIdempotencyStore(ledgerPath),
+  );
+  expect(await reopenedRuntime.execute(command)).toMatchObject({
+    error: {
+      code: "SERVER_REJECTED",
+      causeCode: "FEISHU_230101",
+      retryable: false,
+    },
+  });
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
+it("redacts invalid provider codes before returning or persisting them", async () => {
+  const send = vi.fn<FeishuClient["send"]>().mockResolvedValue({
+    status: "rejected",
+    code: "secret delivery token with spaces",
+  });
+  const app = await runtime(send);
+  const first = await app.execute(command);
+  const duplicate = await app.execute(command);
+
+  expect(first).toMatchObject({
+    error: {
+      code: "SERVER_REJECTED",
+      causeCode: "UPSTREAM_CODE_REDACTED",
+      retryable: false,
+    },
+  });
+  expect(duplicate).toEqual(first);
+  expect(JSON.stringify(first)).not.toContain("secret delivery token");
+  expect(send).toHaveBeenCalledTimes(1);
+});

@@ -6,20 +6,13 @@ import { Transform } from "node:stream";
 import { fileTypeFromFile } from "file-type";
 
 import { FeishuCli, FeishuCliError, type FeishuCliRunner } from "./cli.js";
+import { uploadMedia } from "./media-upload.js";
+import {
+  feishuConfigurationSchema,
+  type FeishuConfiguration,
+} from "../messaging/config.js";
 
 export type FeishuClientCli = Pick<FeishuCliRunner, "run" | "subscribe">;
-
-export type FeishuConfig = {
-  profile: string;
-  receiveIdType: "open_id" | "chat_id";
-  receiveId: string;
-  ownerOpenId: string;
-};
-
-export type FeishuTarget = Pick<
-  FeishuConfig,
-  "receiveIdType" | "receiveId" | "ownerOpenId"
->;
 
 export type FeishuPayload =
   | { type: "text"; text: string }
@@ -50,6 +43,12 @@ export type FeishuInboundMessage = {
 export type FeishuInboundCallback = (
   message: FeishuInboundMessage,
 ) => void | Promise<void>;
+
+export type FeishuInboundDiagnostics = {
+  lastEventAt: string | null;
+  lastFilterReason: string | null;
+  lastInboundError: string | null;
+};
 
 const MAX_TEXT_LENGTH = 4000;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -103,22 +102,6 @@ function receivedAt(value: unknown): number {
     : Date.now();
 }
 
-function apiCode(error: unknown): string | null {
-  const code =
-    error instanceof FeishuCliError
-      ? error.code
-      : error !== null && typeof error === "object"
-        ? (error as { code?: unknown }).code
-        : undefined;
-  if (typeof code === "string" && /^FEISHU_[A-Z0-9_]+$/.test(code))
-    return /^FEISHU_\d+$/.test(code) &&
-      Number(code.slice("FEISHU_".length)) >= 500 &&
-      Number(code.slice("FEISHU_".length)) < 600
-      ? null
-      : code;
-  return null;
-}
-
 function typedCode(error: unknown): string | null {
   if (error instanceof FeishuCliError) return error.code;
   if (error !== null && typeof error === "object") {
@@ -152,6 +135,41 @@ function messageIdFrom(value: unknown): string | null {
   return null;
 }
 
+function sendFailureCode(error: unknown): FeishuSendResult {
+  const code =
+    error instanceof FeishuCliError
+      ? error.code
+      : error !== null && typeof error === "object"
+        ? (error as { code?: unknown }).code
+        : undefined;
+  if (typeof code === "string") {
+    if (/^FEISHU_[A-Z0-9_]+$/.test(code)) {
+      const numeric = /^FEISHU_(\d+)$/.exec(code)?.[1];
+      if (
+        numeric !== undefined &&
+        Number(numeric) >= 500 &&
+        Number(numeric) < 600
+      )
+        return unknown(`SEND_${code}`);
+      return rejected(`SEND_${code}`);
+    }
+    if (code === "CLI_TIMEOUT" || code.endsWith("_TIMEOUT"))
+      return unknown("SEND_CLI_TIMEOUT");
+    if (code === "CLI_MALFORMED_OUTPUT")
+      return unknown("SEND_MALFORMED_RESPONSE");
+    if (
+      code === "CLI_NOT_FOUND" ||
+      code === "CLI_EXECUTION_FAILED" ||
+      /^CLI_INVALID(?:_[A-Z0-9_]+)?$/.test(code)
+    )
+      return failed(`SEND_${code}`);
+    if (/^CLI_(?:NETWORK|HTTP)_[A-Z0-9_]+$/.test(code))
+      return unknown(`SEND_${code}`);
+    if (/^CLI_[A-Z0-9_]+$/.test(code)) return unknown(`SEND_${code}`);
+  }
+  return unknown("SEND_NETWORK_RESULT_UNKNOWN");
+}
+
 class ByteLimitTransform extends Transform {
   private total = 0;
 
@@ -179,9 +197,14 @@ class ByteLimitTransform extends Transform {
 export class FeishuClient {
   private readonly cli: FeishuClientCli;
   private subscription: { close(): void; isOpen?: () => boolean } | null = null;
+  private diagnostics: FeishuInboundDiagnostics = {
+    lastEventAt: null,
+    lastFilterReason: null,
+    lastInboundError: null,
+  };
 
   public constructor(
-    private readonly config: FeishuConfig,
+    private readonly config: FeishuConfiguration,
     private readonly stateDir: string,
     cli?: FeishuClientCli,
   ) {
@@ -212,12 +235,20 @@ export class FeishuClient {
     if ("status" in staged) return staged;
     try {
       const flag = payload.type === "image" ? "--image" : "--file";
+      const uploaded = await uploadMedia(this.cli, {
+        type: payload.type,
+        fileName: staged.fileName,
+        cwd: staged.cwd,
+      });
+      if ("status" in uploaded) return uploaded;
       return await this.sendCommand(
-        [flag, `./${staged.fileName}`, "--idempotency-key", clientId],
+        [flag, uploaded.key, "--idempotency-key", clientId],
         staged.cwd,
       );
     } finally {
-      await rm(staged.directory, { recursive: true, force: true });
+      await rm(staged.directory, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
     }
   }
 
@@ -244,7 +275,12 @@ export class FeishuClient {
     }
     try {
       this.subscription = await this.cli.subscribe(async (event) => {
-        await this.handleInbound(event, callback);
+        try {
+          await this.handleInbound(event, callback);
+        } catch {
+          this.diagnostics.lastInboundError = "INBOUND_PROCESSING_FAILED";
+          throw new Error("INBOUND_PROCESSING_FAILED");
+        }
       });
     } catch (error) {
       this.subscription = null;
@@ -260,6 +296,10 @@ export class FeishuClient {
 
   public isReceiving(): boolean {
     return this.subscription?.isOpen?.() ?? this.subscription !== null;
+  }
+
+  public getInboundDiagnostics(): FeishuInboundDiagnostics {
+    return { ...this.diagnostics };
   }
 
   public async downloadResource(
@@ -327,9 +367,11 @@ export class FeishuClient {
   private validateTarget(): FeishuSendResult | null {
     if (!validString(this.config.profile)) return failed("INVALID_PROFILE");
     if (
-      !validString(this.config.receiveId) ||
-      !validString(this.config.ownerOpenId)
+      this.config.receiveIdType === "open_id" &&
+      (!("dmChatId" in this.config) || !validString(this.config.dmChatId))
     )
+      return failed("FEISHU_REBIND_REQUIRED");
+    if (!feishuConfigurationSchema.safeParse(this.config).success)
       return failed("INVALID_TARGET");
     return null;
   }
@@ -371,11 +413,16 @@ export class FeishuClient {
       }
     }
 
-    const cwd = await mkdtemp(join(this.stateDir, "feishu-staging-"));
+    let cwd: string;
+    try {
+      cwd = await mkdtemp(join(this.stateDir, "feishu-staging-"));
+    } catch {
+      return failed("STAGED_FILE_UNREADABLE");
+    }
     try {
       await copyFile(payload.stagedPath, join(cwd, basename(payload.fileName)));
     } catch {
-      await rm(cwd, { recursive: true, force: true });
+      await rm(cwd, { recursive: true, force: true }).catch(() => undefined);
       return failed("STAGED_FILE_UNREADABLE");
     }
     return { cwd, directory: cwd, fileName: basename(payload.fileName) };
@@ -388,8 +435,10 @@ export class FeishuClient {
     const command = [
       "im",
       "+messages-send",
-      this.config.receiveIdType === "open_id" ? "--user-id" : "--chat-id",
-      this.config.receiveId,
+      "--chat-id",
+      this.config.receiveIdType === "open_id"
+        ? this.config.dmChatId
+        : this.config.receiveId,
       ...args,
     ];
     try {
@@ -399,14 +448,10 @@ export class FeishuClient {
       );
       const id = messageIdFrom(data);
       return id === null
-        ? unknown("MALFORMED_SEND_RESPONSE")
+        ? unknown("SEND_MALFORMED_RESPONSE")
         : { status: "accepted", clientMessageId: id };
     } catch (error) {
-      const serverCode = apiCode(error);
-      if (serverCode !== null) return rejected(serverCode);
-      return unknown(
-        error instanceof FeishuCliError ? error.code : "NETWORK_RESULT_UNKNOWN",
-      );
+      return sendFailureCode(error);
     }
   }
 
@@ -414,21 +459,47 @@ export class FeishuClient {
     event: unknown,
     callback: FeishuInboundCallback,
   ): Promise<void> {
-    if (event === null || typeof event !== "object") return;
-    const flat = event as Record<string, unknown>;
-    if (flat.type !== "im.message.receive_v1" || flat.sender_type !== "user")
+    if (event === null || typeof event !== "object") {
+      this.diagnostics.lastFilterReason = "INVALID_EVENT";
       return;
-    if (flat.sender_id !== this.config.ownerOpenId) return;
+    }
+    const flat = event as Record<string, unknown>;
+    if (flat.type !== "im.message.receive_v1" || flat.sender_type !== "user") {
+      this.diagnostics.lastFilterReason = "INVALID_EVENT";
+      return;
+    }
+    this.diagnostics.lastEventAt = new Date().toISOString();
+    if (flat.sender_id !== this.config.ownerOpenId) {
+      this.diagnostics.lastFilterReason = "OWNER_MISMATCH";
+      return;
+    }
     if (this.config.receiveIdType === "chat_id") {
-      if (flat.chat_type !== "group" || flat.chat_id !== this.config.receiveId)
+      if (
+        flat.chat_type !== "group" ||
+        flat.chat_id !== this.config.receiveId
+      ) {
+        this.diagnostics.lastFilterReason = "CHAT_MISMATCH";
         return;
-    } else if (flat.chat_type !== "p2p") return;
+      }
+    } else if (
+      flat.chat_type !== "p2p" ||
+      flat.chat_id !== this.config.dmChatId
+    ) {
+      this.diagnostics.lastFilterReason = "CHAT_MISMATCH";
+      return;
+    }
     const id = flat.message_id;
     const type = flat.message_type;
-    if (!validString(id) || !id.startsWith("om_") || !validString(type)) return;
+    if (!validString(id) || !id.startsWith("om_") || !validString(type)) {
+      this.diagnostics.lastFilterReason = "INVALID_MESSAGE";
+      return;
+    }
 
     if (type === "text") {
-      if (typeof flat.content !== "string") return;
+      if (typeof flat.content !== "string") {
+        this.diagnostics.lastFilterReason = "INVALID_MESSAGE";
+        return;
+      }
       await callback({
         id,
         text: flat.content,
@@ -437,7 +508,10 @@ export class FeishuClient {
       });
       return;
     }
-    if (type !== "image" && type !== "file") return;
+    if (type !== "image" && type !== "file") {
+      this.diagnostics.lastFilterReason = "UNSUPPORTED_MESSAGE_TYPE";
+      return;
+    }
 
     const raw = await this.cli.run([
       "api",
@@ -446,9 +520,15 @@ export class FeishuClient {
     ]);
     const body = findMessageBody(raw);
     const content = parseObject(body?.content);
-    if (content === null) return;
+    if (content === null) {
+      this.diagnostics.lastFilterReason = "INVALID_MESSAGE";
+      return;
+    }
     const key = type === "image" ? content.image_key : content.file_key;
-    if (!validString(key)) return;
+    if (!validString(key)) {
+      this.diagnostics.lastFilterReason = "INVALID_MESSAGE";
+      return;
+    }
     const fileName =
       typeof content.file_name === "string" && safeFileName(content.file_name)
         ? content.file_name

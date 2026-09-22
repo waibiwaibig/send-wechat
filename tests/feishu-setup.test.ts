@@ -16,6 +16,7 @@ const existingDm: FeishuConfiguration = {
   receiveIdType: "open_id",
   receiveId: "ou_existing",
   ownerOpenId: "ou_existing",
+  dmChatId: "oc_existing",
 };
 
 function messageEvent(
@@ -253,6 +254,7 @@ it("accepts only a fresh text event with the exact code and owner filters", asyn
     receiveIdType: "open_id",
     receiveId: "ou_owner",
     ownerOpenId: "ou_owner",
+    dmChatId: "oc_chat",
   });
   expect(app.close).toHaveBeenCalledTimes(1);
 });
@@ -307,6 +309,29 @@ it("requires the bot mention and exact code for a group binding", async () => {
   });
   expect(app.output.join("")).toContain("@机器人");
   expect(app.close).toHaveBeenCalledTimes(1);
+});
+
+it("rebinds an old DM config only when explicitly requested", async () => {
+  const app = harness({
+    existing: {
+      profile: "send-message",
+      receiveIdType: "open_id",
+      receiveId: "ou_existing",
+      ownerOpenId: "ou_existing",
+    } as unknown as FeishuConfiguration,
+  });
+  const setup = setupFeishu(
+    stateDir,
+    { target: "dm", rebind: true, onOutput: app.onOutput },
+    app.dependencies,
+  );
+  await vi.waitFor(() => expect(app.cli.subscribe).toHaveBeenCalledTimes(1));
+  await app.emit(messageEvent());
+  await expect(setup).resolves.toMatchObject({
+    receiveIdType: "open_id",
+    receiveId: "ou_owner",
+    dmChatId: "oc_chat",
+  });
 });
 
 it("times out a rebind without overwriting the existing binding", async () => {

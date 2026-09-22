@@ -83,6 +83,32 @@ function tryParsedJson(text: string): unknown {
   }
 }
 
+function parseStructuredOutput(text: string): unknown {
+  const parsed = tryParsedJson(text);
+  if (parsed !== null) return parsed;
+  const lines = text.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = tryParsedJson(lines[index] ?? "");
+    if (line !== null) return line;
+  }
+  return null;
+}
+
+function appendBounded(text: string, chunk: string, maxBytes: number): string {
+  const combined = text + chunk;
+  if (Buffer.byteLength(combined) <= maxBytes) return combined;
+  return Buffer.from(combined).subarray(-maxBytes).toString("utf8");
+}
+
+function isFailureEnvelope(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as { ok?: unknown }).ok === false
+  );
+}
+
 function isRawJsonCommand(args: readonly string[]): boolean {
   return (
     (args[0] === "profile" && args[1] === "list") ||
@@ -106,9 +132,16 @@ function usesBotIdentity(args: readonly string[]): boolean {
   return args[0] !== "profile" && args[0] !== "config";
 }
 
+function isEventConsumeCommand(args: readonly string[]): boolean {
+  return args[0] === "event" && args[1] === "consume";
+}
+
 function appendDefaults(args: readonly string[], profile: string): string[] {
   const result = [...args, "--profile", profile];
-  if (usesBotIdentity(args)) result.push("--as", "bot", "--format", "json");
+  if (usesBotIdentity(args)) {
+    result.push("--as", "bot");
+    if (!isEventConsumeCommand(args)) result.push("--format", "json");
+  }
   return result;
 }
 
@@ -227,9 +260,17 @@ export class FeishuCli {
     let callbackQueue: Promise<void> = Promise.resolve();
     let pendingCallbacks = 0;
     let stdoutBuffer = "";
+    let startupOutput = "";
     child.stdout.on("data", (chunk: Buffer | string) => {
       if (closed) return;
-      stdoutBuffer += String(chunk);
+      const text = String(chunk);
+      if (!ready)
+        startupOutput = appendBounded(
+          startupOutput,
+          text,
+          MAX_EVENT_LINE_BYTES,
+        );
+      stdoutBuffer += text;
       if (Buffer.byteLength(stdoutBuffer) > MAX_EVENT_LINE_BYTES) {
         closed = true;
         closeChild(child);
@@ -248,6 +289,10 @@ export class FeishuCli {
           }
           try {
             const event = JSON.parse(line) as unknown;
+            if (!ready && isFailureEnvelope(event)) {
+              newline = stdoutBuffer.indexOf("\n");
+              continue;
+            }
             pendingCallbacks++;
             callbackQueue = callbackQueue
               .then(() => (closed ? undefined : callback(event)))
@@ -267,7 +312,14 @@ export class FeishuCli {
     const readyPromise = new Promise<void>((resolveReady, rejectReady) => {
       rejectReadyPromise = rejectReady;
       const onStderr = (chunk: Buffer | string) => {
-        stderrBuffer += String(chunk);
+        const text = String(chunk);
+        if (!ready)
+          startupOutput = appendBounded(
+            startupOutput,
+            text,
+            MAX_EVENT_LINE_BYTES,
+          );
+        stderrBuffer += text;
         if (
           !ready &&
           /(?:^|\n)\[event\] ready event_key=im\.message\.receive_v1(?:\n|$)/.test(
@@ -295,7 +347,12 @@ export class FeishuCli {
         closed = true;
         exited = true;
         if (!ready)
-          rejectReady(this.errorFromFailure(null, status ?? undefined));
+          rejectReady(
+            this.errorFromFailure(
+              parseStructuredOutput(startupOutput),
+              status ?? undefined,
+            ),
+          );
       });
     });
     const readyTimer = setTimeout(() => {
